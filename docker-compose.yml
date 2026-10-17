@@ -71,6 +71,7 @@ services:
       RAILS_ENV: ${RAILS_ENV:-development}
       REDIS_URL: redis://:${REDIS_PASSWORD:-evoai_redis_pass}@redis:6379/1
       POSTGRES_HOST: postgres
+      DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY}
       # EVO-1999: this service's command already runs db:create && db:migrate, and
       # the image migrates on boot (entrypoint). RUN_MIGRATIONS=false avoids doubling.
       RUN_MIGRATIONS: "false"
@@ -99,6 +100,7 @@ services:
       RAILS_ENV: ${RAILS_ENV:-development}
       REDIS_URL: redis://:${REDIS_PASSWORD:-evoai_redis_pass}@redis:6379/1
       POSTGRES_HOST: postgres
+      DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY}
       # EVO-1999: sidekiq must not run migrations (the web service already covers it).
       RUN_MIGRATIONS: "false"
     depends_on:
