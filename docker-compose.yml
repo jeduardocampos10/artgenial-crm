@@ -6,7 +6,7 @@ services:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     ports:
-      - "55434:5432"
+      - "21532:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
@@ -25,7 +25,7 @@ services:
     restart: unless-stopped
     command: ["sh", "-c", "redis-server --requirepass ${REDIS_PASSWORD:-evoai_redis_pass} --appendonly yes"]
     ports:
-      - "56381:6379"
+      - "21679:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -38,8 +38,8 @@ services:
     image: mailhog/mailhog
     restart: unless-stopped
     ports:
-      - "11025:1025"
-      - "18025:8025"
+      - "21025:1025"
+      - "21825:8025"
 
   # Message broker for EvoFlow. Its global BrokerModule connects on boot even in
   # api/direct mode (which writes straight to ClickHouse), so a broker must be
@@ -48,7 +48,7 @@ services:
     image: rabbitmq:3-alpine
     restart: unless-stopped
     ports:
-      - "55672:5672"
+      - "21672:5672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -65,7 +65,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "3011:3001"
+      - "21301:3001"
     env_file: .env
     environment:
       RAILS_ENV: ${RAILS_ENV:-development}
@@ -124,7 +124,7 @@ services:
         RAILS_SERVE_STATIC_FILES: "false"
     restart: unless-stopped
     ports:
-      - "3010:3000"
+      - "21300:3000"
     env_file: .env
     environment:
       RAILS_ENV: ${RAILS_ENV:-development}
@@ -213,7 +213,7 @@ services:
     image: evoapicloud/evo-ai-core-service-community:latest
     restart: unless-stopped
     ports:
-      - "5565:5555"
+      - "21555:5555"
     env_file: .env
     environment:
       DB_HOST: postgres
@@ -247,7 +247,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "8011:8000"
+      - "21800:8000"
     env_file: .env
     environment:
       POSTGRES_CONNECTION_STRING: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD:-evoai_dev_password}@postgres:5432/${POSTGRES_DATABASE:-evo_community}
@@ -285,7 +285,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "8092:8080"
+      - "21880:8080"
     env_file: .env
     environment:
       LISTEN_ADDR: 0.0.0.0:8080
@@ -315,8 +315,8 @@ services:
     image: clickhouse/clickhouse-server:latest
     restart: unless-stopped
     ports:
-      - "18123:8123"
-      - "19000:9000"
+      - "21123:8123"
+      - "21900:9000"
     environment:
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: password
@@ -347,7 +347,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "3334:3334"
+      - "21334:3334"
     # No official db:create step — create the dedicated DB if missing, run the
     # TypeORM migrations (idempotent), then boot the app.
     command:
@@ -417,7 +417,7 @@ services:
       VITE_AGENT_PROCESSOR_URL: ${VITE_AGENT_PROCESSOR_URL:-http://localhost:8011}
       VITE_EVOFLOW_API_URL: ${VITE_EVOFLOW_API_URL:-http://localhost:3334}
     ports:
-      - "5173:80"
+      - "21080:80"
     depends_on:
       evo-auth:
         condition: service_healthy
