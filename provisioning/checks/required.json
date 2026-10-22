@@ -9,7 +9,8 @@
     {"id":"auth_account","kind":"authenticated_account","domain_key":"auth_api","path":"/api/v1/account","expected":"HTTP 200 with configured account JSON","required":true},
     {"id":"vite_api_url","kind":"frontend_binding","variable":"VITE_API_URL","domain_key":"crm_api","required":true},
     {"id":"vite_auth_api_url","kind":"frontend_binding","variable":"VITE_AUTH_API_URL","domain_key":"auth_api","required":true},
-    {"id":"vite_ws_url","kind":"websocket_upgrade","variable":"VITE_WS_URL","domain_key":"crm_api","path":"/cable","required":true},
+    {"id":"vite_ws_url","kind":"frontend_binding","variable":"VITE_WS_URL","domain_key":"crm_api","required":true},
+    {"id":"crm_websocket","kind":"websocket_upgrade","domain_key":"crm_api","path":"/cable","required":true},
     {"id":"vite_evoai_api_url","kind":"frontend_binding","variable":"VITE_EVOAI_API_URL","domain_key":"core_api","required":true},
     {"id":"vite_agent_processor_url","kind":"frontend_binding","variable":"VITE_AGENT_PROCESSOR_URL","domain_key":"processor_api","required":true},
     {"id":"vite_evoflow_api_url","kind":"frontend_binding","variable":"VITE_EVOFLOW_API_URL","domain_key":"flow_api","required":true}

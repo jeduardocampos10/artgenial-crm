@@ -201,6 +201,7 @@ def plan(config, catalog, checks):
     ])
     for check in checks["checks"]:
         domain = config["domains"][check["domain_key"]].rstrip("/")
+        # Frontend bindings retain the HTTP(S) origin; only upgrade checks use WS(S).
         if check["kind"] == "websocket_upgrade":
             domain = ("wss://" if domain.startswith("https://") else "ws://") + domain.split("://", 1)[1]
         target = domain + check.get("path", "")

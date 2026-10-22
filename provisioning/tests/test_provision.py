@@ -75,9 +75,24 @@ class ProvisioningFoundationTest(unittest.TestCase):
         self.assertIn("INICIALIZAÇÃO", first)
         self.assertIn("RuntimeConfig.account", first)
         self.assertIn("artgenial.base v1", first)
-        self.assertIn("VITE_WS_URL", first)
-        self.assertIn("wss://api.cliente.example.test/cable", first)
         self.assertNotIn("runtime:POSTGRES_PASSWORD", first)
+
+    def test_websocket_binding_and_upgrade_are_distinct(self):
+        checks_by_id = {check["id"]: check for check in self.checks["checks"]}
+        self.assertEqual(checks_by_id["vite_ws_url"]["kind"], "frontend_binding")
+        self.assertEqual(checks_by_id["vite_ws_url"]["domain_key"], "crm_api")
+        self.assertNotIn("path", checks_by_id["vite_ws_url"])
+        self.assertEqual(checks_by_id["crm_websocket"]["kind"], "websocket_upgrade")
+        self.assertEqual(checks_by_id["crm_websocket"]["domain_key"], "crm_api")
+        self.assertEqual(checks_by_id["crm_websocket"]["path"], "/cable")
+
+        lines = plan(self.config, self.catalog, self.checks).splitlines()
+        binding = next(line for line in lines if "[VITE_WS_URL]" in line)
+        upgrade = next(line for line in lines if "crm_websocket:" in line)
+        self.assertIn("https://api.cliente.example.test (frontend_binding)", binding)
+        self.assertNotIn("wss://", binding)
+        self.assertNotIn("/cable", binding)
+        self.assertIn("wss://api.cliente.example.test/cable (websocket_upgrade)", upgrade)
 
     def test_catalog_contains_all_compose_services(self):
         self.assertEqual(len(self.catalog["services"]), 14)
