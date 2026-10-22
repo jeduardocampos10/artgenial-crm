@@ -1,0 +1,19 @@
+{
+  "source": "docker-compose.yml",
+  "services": [
+    {"name":"postgres","internal_port":5432,"public_endpoint_required":false,"role":"database","depends_on":[],"volumes":["postgres_data"]},
+    {"name":"redis","internal_port":6379,"public_endpoint_required":false,"role":"cache and queues","depends_on":[],"volumes":["redis_data"]},
+    {"name":"mailhog","internal_port":1025,"additional_internal_ports":[8025],"public_endpoint_required":false,"role":"local mail testing; replace or disable for production","depends_on":[],"volumes":[]},
+    {"name":"rabbitmq","internal_port":5672,"public_endpoint_required":false,"role":"message broker","depends_on":[],"volumes":[]},
+    {"name":"evo-auth","internal_port":3001,"public_endpoint_required":true,"domain_key":"auth_api","health_path":"/health","role":"authentication and account configuration","depends_on":["postgres","redis"],"volumes":["auth_storage"]},
+    {"name":"evo-auth-sidekiq","internal_port":null,"public_endpoint_required":false,"role":"authentication background jobs","depends_on":["postgres","redis"],"volumes":["auth_storage"]},
+    {"name":"evo-crm","internal_port":3000,"public_endpoint_required":true,"domain_key":"crm_api","health_path":"/health/live","role":"CRM API and WebSocket","depends_on":["postgres","redis","evo-auth"],"volumes":["crm_bundle","crm_node_modules","crm_cache","crm_storage"]},
+    {"name":"evo-crm-sidekiq","internal_port":null,"public_endpoint_required":false,"role":"CRM background jobs","depends_on":["postgres","redis"],"volumes":["crm_bundle","crm_node_modules","crm_cache","crm_storage"]},
+    {"name":"evo-core","internal_port":5555,"public_endpoint_required":true,"domain_key":"core_api","health_path":"/health","role":"AI agents API","depends_on":["postgres"],"volumes":[]},
+    {"name":"evo-processor","internal_port":8000,"public_endpoint_required":true,"domain_key":"processor_api","health_path":"/health","role":"agent processor API","depends_on":["postgres","redis","evo-auth"],"volumes":["processor_logs"]},
+    {"name":"evo-bot-runtime","internal_port":8080,"public_endpoint_required":false,"role":"bot runtime","depends_on":["redis","evo-processor"],"volumes":[]},
+    {"name":"clickhouse","internal_port":8123,"additional_internal_ports":[9000],"public_endpoint_required":false,"role":"Flow analytics storage","depends_on":[],"volumes":["clickhouse_data"]},
+    {"name":"evo-flow","internal_port":3334,"public_endpoint_required":true,"domain_key":"flow_api","health_path":"/health","role":"campaigns and automation API","depends_on":["clickhouse","postgres","rabbitmq","redis"],"volumes":[]},
+    {"name":"evo-frontend","internal_port":80,"public_endpoint_required":true,"domain_key":"frontend","health_path":"/health","role":"CRM frontend","depends_on":["evo-auth","evo-crm"],"volumes":[]}
+  ]
+}
