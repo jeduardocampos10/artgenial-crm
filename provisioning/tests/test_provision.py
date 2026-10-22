@@ -5,13 +5,17 @@ import unittest
 from provisioning.scripts.provision import (
     CATALOG,
     CHECKS,
+    COMMERCIAL_RUNTIME,
     CONTRACT,
     DEPLOYMENT_VARIABLES,
     EXAMPLE,
+    ConfigurationError,
+    _commercial_database,
     build_manifest,
     load_json,
     plan,
     validate,
+    validate_commercial_policy,
     validate_deployment_catalog,
 )
 
@@ -23,6 +27,7 @@ class ProvisioningFoundationTest(unittest.TestCase):
         cls.catalog = load_json(CATALOG)
         cls.checks = load_json(CHECKS)
         cls.variables_catalog = load_json(DEPLOYMENT_VARIABLES)
+        cls.commercial_policy = load_json(COMMERCIAL_RUNTIME)
 
     def setUp(self):
         self.config = copy.deepcopy(load_json(EXAMPLE))
@@ -34,7 +39,8 @@ class ProvisioningFoundationTest(unittest.TestCase):
         self.assertEqual(self.errors(), [])
         self.assertEqual(validate_deployment_catalog(
             self.variables_catalog, self.contract, self.catalog, self.checks), [])
-        return build_manifest(self.config, self.catalog, self.checks, self.variables_catalog)
+        policy = self.commercial_policy if self.config["environment"] == "production" else None
+        return build_manifest(self.config, self.catalog, self.checks, self.variables_catalog, policy)
 
     def test_example_is_valid(self):
         self.assertEqual(self.errors(), [])
@@ -171,7 +177,9 @@ class ProvisioningFoundationTest(unittest.TestCase):
         self.assertEqual(secrets["AUTH_APIKEY_INTEGRATION_LOCAL"]["reference"],
                          "runtime:AUTH_APIKEY_INTEGRATION_LOCAL")
         settings = data["variables"]["environment_setting"]
-        self.assertTrue(all(item["value"] is None for item in settings))
+        self.assertTrue(all(item["value"] is not None for item in settings))
+        self.assertTrue(all(item["status"] == "resolved_by_commercial_policy" for item in settings))
+        self.assertFalse(any("runtime setting" in item for item in data["delivery"]["pending_requirements"]))
         self.assertTrue(any("commercial email" in item for item in data["delivery"]["pending_requirements"]))
         output = json.dumps(data)
         for unsafe in ("evoflow-dev-key", "evoai_dev_password", "evoai_redis_pass", "localhost", ".test"):
@@ -202,6 +210,119 @@ class ProvisioningFoundationTest(unittest.TestCase):
         self.assertEqual(data["delivery"]["release_rule"], "all_required_checks_pass")
         self.assertEqual(set(data["delivery"]["required_check_ids"]),
                          {check["id"] for check in self.checks["checks"] if check["required"]})
+
+    def test_commercial_policy_is_valid_and_deterministic(self):
+        self.assertEqual(validate_commercial_policy(self.commercial_policy), [])
+        self.assertEqual(self.commercial_policy, load_json(COMMERCIAL_RUNTIME))
+        self.assertEqual(set(self.commercial_policy["settings"]),
+                         {item["name"] for item in self.variables_catalog["variables"]
+                          if item["classification"] == "environment_setting"})
+        self.assertFalse(any("SECRET" in name or "PASSWORD" in name or "TOKEN" in name
+                             for name in self.commercial_policy["settings"]))
+
+    def test_commercial_policy_rejects_unknown_missing_and_secret_fields(self):
+        policy = copy.deepcopy(self.commercial_policy)
+        policy["unknown"] = "value"
+        self.assertTrue(validate_commercial_policy(policy))
+        policy = copy.deepcopy(self.commercial_policy)
+        del policy["settings"]["DEBUG"]
+        self.assertTrue(validate_commercial_policy(policy))
+        policy = copy.deepcopy(self.commercial_policy)
+        policy["settings"]["POSTGRES_PASSWORD"] = {"kind": "fixed", "value": "literal"}
+        self.assertTrue(validate_commercial_policy(policy))
+        policy = copy.deepcopy(self.commercial_policy)
+        policy["settings"]["RAILS_ENV"]["password"] = "literal"
+        self.assertTrue(validate_commercial_policy(policy))
+
+    def test_commercial_policy_rejects_unsafe_or_development_values(self):
+        for name, value in (
+            ("RAILS_ENV", "development"),
+            ("VITE_APP_ENV", "development"),
+            ("DEBUG", True),
+            ("EVO_FLOW_ALLOW_INSECURE", True),
+            ("POSTGRES_USERNAME", "evoai_dev_password"),
+        ):
+            with self.subTest(name=name):
+                policy = copy.deepcopy(self.commercial_policy)
+                policy["settings"][name]["value"] = value
+                self.assertTrue(validate_commercial_policy(policy))
+        policy = copy.deepcopy(self.commercial_policy)
+        policy["settings"]["MEDIA_HOST_ALLOWLIST"] = {"kind": "fixed", "value": "localhost"}
+        self.assertTrue(validate_commercial_policy(policy))
+
+    def test_production_settings_use_fixed_policy_and_approved_derivations(self):
+        self.config["environment"] = "production"
+        self.config["installation_name"] = "Cliente Alfa"
+        self.config["slug"] = "cliente-alfa"
+        self.config["installation_key"] = "eb14dca5-d6ca-40e1-a124-b2f2fa13422a"
+        self.config["domains"] = {
+            key: f"https://{key.replace('_', '-')}.cliente-alfa.com.br"
+            for key in self.config["domains"]
+        }
+        self.config["administrator"]["email"] = "admin@cliente-alfa.com.br"
+        data = self.manifest()
+        self.assertEqual(json.dumps(data, sort_keys=True),
+                         json.dumps(self.manifest(), sort_keys=True))
+        settings = {item["name"]: item for item in data["variables"]["environment_setting"]}
+        self.assertEqual(len(settings), 14)
+        for name, expected in (
+            ("RAILS_ENV", "production"), ("VITE_APP_ENV", "production"),
+            ("DEBUG", False), ("EVO_FLOW_ALLOW_INSECURE", False),
+        ):
+            self.assertEqual(settings[name]["value"], expected)
+            self.assertEqual(settings[name]["source"]["kind"], "commercial_runtime_policy")
+        self.assertEqual(settings["MEDIA_HOST_ALLOWLIST"]["value"], "crm-api.cliente-alfa.com.br")
+        self.assertEqual(settings["MEDIA_HOST_ALLOWLIST"]["source"]["rule"],
+                         "hostname_from_crm_api_v1")
+        self.assertEqual(settings["POSTGRES_DATABASE"]["value"], "artgenial_cliente_alfa")
+        self.assertEqual(settings["POSTGRES_DATABASE"]["source"]["rule"], "database_from_slug_v1")
+        self.assertNotIn("evo_community", json.dumps(data))
+        self.assertFalse(any("runtime setting" in item for item in data["delivery"]["pending_requirements"]))
+        self.assertTrue(any("runtime secret" in item for item in data["delivery"]["pending_requirements"]))
+        self.assertTrue(any("commercial email" in item for item in data["delivery"]["pending_requirements"]))
+        self.assertTrue(any("required public and account checks" in item
+                            for item in data["delivery"]["pending_requirements"]))
+        self.assertFalse(data["delivery"]["ready"])
+        self.assertTrue(all(item["reference"].startswith("runtime:")
+                            for item in data["variables"]["secret_reference"]))
+        self.assertFalse(next(item for item in data["infrastructure"]
+                              if item["name"] == "mailhog")["commercial_email_solution"])
+        self.assertFalse(next(item for item in data["infrastructure"]
+                              if item["name"] == "postgres")["public_endpoint_required"])
+        self.assertEqual(next(item for item in data["variables"]["domain_binding"]
+                              if item["name"] == "VITE_WS_URL")["value"],
+                         self.config["domains"]["crm_api"])
+        self.assertEqual(next(item for item in data["validation"]
+                              if item["id"] == "crm_websocket")["target"],
+                         "wss://crm-api.cliente-alfa.com.br/cable")
+
+    def test_database_rule_is_stable_and_respects_identifier_limit(self):
+        self.assertEqual(_commercial_database("cliente-alfa"), "artgenial_cliente_alfa")
+        long_slug = "cliente-" + "a" * 80
+        result = _commercial_database(long_slug)
+        self.assertEqual(result, _commercial_database(long_slug))
+        self.assertLessEqual(len(result), 63)
+        self.assertNotEqual(result, _commercial_database("cliente-" + "b" * 80))
+
+    def test_nonproduction_settings_remain_pending(self):
+        for environment in ("development", "staging"):
+            with self.subTest(environment=environment):
+                self.config["environment"] = environment
+                data = self.manifest()
+                settings = data["variables"]["environment_setting"]
+                self.assertTrue(all(item["value"] is None and
+                                    item["status"] == "explicit_runtime_value_required" for item in settings))
+                self.assertTrue(any("runtime setting" in item for item in
+                                    data["delivery"]["pending_requirements"]))
+
+    def test_production_manifest_rejects_missing_or_invalid_policy(self):
+        self.config["environment"] = "production"
+        with self.assertRaises(ConfigurationError):
+            build_manifest(self.config, self.catalog, self.checks, self.variables_catalog)
+        policy = copy.deepcopy(self.commercial_policy)
+        policy["settings"]["DEBUG"]["value"] = True
+        with self.assertRaises(ConfigurationError):
+            build_manifest(self.config, self.catalog, self.checks, self.variables_catalog, policy)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,20 @@
+{
+  "policy_version": 1,
+  "environment": "production",
+  "settings": {
+    "RAILS_ENV": {"kind": "fixed", "value": "production"},
+    "VITE_APP_ENV": {"kind": "fixed", "value": "production"},
+    "DEBUG": {"kind": "fixed", "value": false},
+    "EVO_FLOW_ENABLED": {"kind": "fixed", "value": true},
+    "EVO_FLOW_ALLOW_INSECURE": {"kind": "fixed", "value": false},
+    "ACTIVE_STORAGE_SERVICE": {"kind": "fixed", "value": "local"},
+    "AI_PROCESSOR_VERSION": {"kind": "fixed", "value": "v1"},
+    "LISTEN_ADDR": {"kind": "fixed", "value": "0.0.0.0:8080"},
+    "AI_CALL_TIMEOUT_SECONDS": {"kind": "fixed", "value": 90},
+    "DOORKEEPER_JWT_ALGORITHM": {"kind": "fixed", "value": "hs256"},
+    "DOORKEEPER_JWT_ISS": {"kind": "fixed", "value": "evo-auth-service"},
+    "POSTGRES_USERNAME": {"kind": "fixed", "value": "postgres"},
+    "POSTGRES_DATABASE": {"kind": "derived", "rule": "database_from_slug_v1"},
+    "MEDIA_HOST_ALLOWLIST": {"kind": "derived", "rule": "hostname_from_crm_api_v1"}
+  }
+}

@@ -2,6 +2,7 @@
 """Local validation and deterministic dry-run only. No provisioning side effects."""
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -16,6 +17,7 @@ CATALOG = ROOT / "config" / "services.json"
 CHECKS = ROOT / "checks" / "required.json"
 EXAMPLE = ROOT / "config" / "installation.example.json"
 DEPLOYMENT_VARIABLES = ROOT / "config" / "deployment.variables.json"
+COMMERCIAL_RUNTIME = ROOT / "config" / "commercial.runtime.json"
 REFERENCE_PATTERN = re.compile(r"^runtime:[A-Z][A-Z0-9_]*$")
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 HOST_PATTERN = re.compile(r"^(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$")
@@ -38,6 +40,24 @@ ENVIRONMENT_SETTINGS = {
     "LISTEN_ADDR", "MEDIA_HOST_ALLOWLIST", "AI_CALL_TIMEOUT_SECONDS",
     "DOORKEEPER_JWT_ALGORITHM", "DOORKEEPER_JWT_ISS",
     "POSTGRES_DATABASE", "POSTGRES_USERNAME",
+}
+COMMERCIAL_FIXED_SETTINGS = {
+    "RAILS_ENV": "production",
+    "VITE_APP_ENV": "production",
+    "DEBUG": False,
+    "EVO_FLOW_ENABLED": True,
+    "EVO_FLOW_ALLOW_INSECURE": False,
+    "ACTIVE_STORAGE_SERVICE": "local",
+    "AI_PROCESSOR_VERSION": "v1",
+    "LISTEN_ADDR": "0.0.0.0:8080",
+    "AI_CALL_TIMEOUT_SECONDS": 90,
+    "DOORKEEPER_JWT_ALGORITHM": "hs256",
+    "DOORKEEPER_JWT_ISS": "evo-auth-service",
+    "POSTGRES_USERNAME": "postgres",
+}
+COMMERCIAL_DERIVED_SETTINGS = {
+    "POSTGRES_DATABASE": "database_from_slug_v1",
+    "MEDIA_HOST_ALLOWLIST": "hostname_from_crm_api_v1",
 }
 PRIVATE_SERVICES = {"postgres", "redis", "rabbitmq", "clickhouse", "evo-bot-runtime", "mailhog"}
 
@@ -361,7 +381,57 @@ def _internal_value(source, services):
     return f"{source['scheme']}://{service['name']}:{service['internal_port']}{source.get('path', '')}"
 
 
-def build_manifest(config, catalog, checks, variables_catalog):
+def validate_commercial_policy(policy):
+    """Accept only the approved, secret-free production runtime policy."""
+    if not isinstance(policy, dict) or set(policy) != {"policy_version", "environment", "settings"}:
+        return ["commercial runtime policy must contain only policy_version, environment and settings"]
+    errors = []
+    if type(policy["policy_version"]) is not int or policy["policy_version"] != 1:
+        errors.append("commercial runtime policy_version must be 1")
+    if policy["environment"] != "production":
+        errors.append("commercial runtime policy environment must be production")
+    settings = policy["settings"]
+    if not isinstance(settings, dict):
+        return errors + ["commercial runtime settings must be an object"]
+    if set(settings) != ENVIRONMENT_SETTINGS:
+        errors.append("commercial runtime settings must exactly match ENVIRONMENT_SETTINGS")
+    for name, expected in COMMERCIAL_FIXED_SETTINGS.items():
+        setting = settings.get(name)
+        if (not isinstance(setting, dict) or set(setting) != {"kind", "value"}
+                or setting.get("kind") != "fixed" or type(setting.get("value")) is not type(expected)
+                or setting.get("value") != expected):
+            errors.append(f"commercial runtime {name} must use the approved fixed value")
+    for name, rule in COMMERCIAL_DERIVED_SETTINGS.items():
+        setting = settings.get(name)
+        if not isinstance(setting, dict) or setting != {"kind": "derived", "rule": rule}:
+            errors.append(f"commercial runtime {name} must use approved derivation {rule}")
+    return errors
+
+
+def _commercial_database(slug):
+    """PostgreSQL identifier: injective for short slugs, stable suffix for long ones."""
+    candidate = "artgenial_" + slug.replace("-", "_")
+    if len(candidate) <= 63:
+        return candidate
+    digest = hashlib.sha256(slug.encode("ascii")).hexdigest()[:12]
+    return f"{candidate[:50]}_{digest}"
+
+
+def _commercial_setting(name, config, policy):
+    setting = policy["settings"][name]
+    source = {"kind": "commercial_runtime_policy", "policy_version": policy["policy_version"], "setting": name}
+    if setting["kind"] == "fixed":
+        return setting["value"], source
+    source["kind"] = "commercial_runtime_derivation"
+    source["rule"] = setting["rule"]
+    if name == "POSTGRES_DATABASE":
+        source["input"] = "installation.slug"
+        return _commercial_database(config["slug"]), source
+    source["input"] = "installation.domains.crm_api"
+    return urlsplit(config["domains"]["crm_api"]).hostname, source
+
+
+def build_manifest(config, catalog, checks, variables_catalog, commercial_policy=None):
     """Build data only; caller validates first and decides whether to print it."""
     services = {service["name"]: service for service in catalog["services"]}
     infrastructure = []
@@ -380,6 +450,10 @@ def build_manifest(config, catalog, checks, variables_catalog):
 
     variables = {classification: [] for classification in VARIABLE_CLASSES}
     production = config["environment"] == "production"
+    if production:
+        errors = validate_commercial_policy(commercial_policy)
+        if errors:
+            raise ConfigurationError("; ".join(errors))
     pending = []
     for item in sorted(variables_catalog["variables"], key=lambda item: item["name"]):
         source = item["source"]
@@ -399,6 +473,9 @@ def build_manifest(config, catalog, checks, variables_catalog):
             entry["value"] = config["domains"][source["key"]].rstrip("/")
         elif classification == "internal_service_binding":
             entry["value"] = _internal_value(source, services)
+        elif classification == "environment_setting" and production:
+            entry["value"], entry["source"] = _commercial_setting(item["name"], config, commercial_policy)
+            entry["status"] = "resolved_by_commercial_policy"
         else:
             entry["value"] = None
             entry["status"] = "explicit_runtime_value_required" if entry["required"] else "optional_unconfigured"
@@ -445,6 +522,7 @@ def main(argv=None):
     parser.add_argument("command", choices=["validate", "plan", "manifest"])
     parser.add_argument("--config", type=Path, default=EXAMPLE)
     args = parser.parse_args(argv)
+    commercial_policy = None
     try:
         contract, catalog, checks = load_json(CONTRACT), load_json(CATALOG), load_json(CHECKS)
         config = load_json(args.config)
@@ -452,6 +530,9 @@ def main(argv=None):
         if args.command == "manifest" and not errors:
             variables_catalog = load_json(DEPLOYMENT_VARIABLES)
             errors = validate_deployment_catalog(variables_catalog, contract, catalog, checks)
+            if not errors and config["environment"] == "production":
+                commercial_policy = load_json(COMMERCIAL_RUNTIME)
+                errors = validate_commercial_policy(commercial_policy)
     except ConfigurationError as exc:
         print(f"INVALID: {exc}", file=sys.stderr)
         return 2
@@ -464,7 +545,7 @@ def main(argv=None):
     elif args.command == "plan":
         print(plan(config, catalog, checks))
     else:
-        print(json.dumps(build_manifest(config, catalog, checks, variables_catalog),
+        print(json.dumps(build_manifest(config, catalog, checks, variables_catalog, commercial_policy),
                          ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
