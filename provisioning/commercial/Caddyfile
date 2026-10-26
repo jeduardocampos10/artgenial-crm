@@ -1,0 +1,18 @@
+{$FRONTEND_HOST} {
+  reverse_proxy evo-frontend:80
+}
+{$CRM_API_HOST} {
+  reverse_proxy evo-crm:3000
+}
+{$AUTH_API_HOST} {
+  reverse_proxy evo-auth:3001
+}
+{$CORE_API_HOST} {
+  reverse_proxy evo-core:5555
+}
+{$PROCESSOR_API_HOST} {
+  reverse_proxy evo-processor:8000
+}
+{$FLOW_API_HOST} {
+  reverse_proxy evo-flow:3334
+}

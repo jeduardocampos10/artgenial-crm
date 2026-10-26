@@ -1,4 +1,7 @@
 .env
+provisioning/commercial/*.env
+provisioning/commercial/*.state.json
+provisioning/commercial/installation.production.json
 _evo*
 
 .claude

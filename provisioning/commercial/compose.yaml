@@ -1,0 +1,241 @@
+name: ${ARTGENIAL_PROJECT:?}
+x-common: &common
+  networks: [private]
+  restart: unless-stopped
+x-rails: &rails
+  RAILS_ENV: production
+  RUN_MIGRATIONS: "true"
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DATABASE: ${POSTGRES_DATABASE:?}
+  POSTGRES_USERNAME: ${POSTGRES_USERNAME:?}
+  FRONTEND_URL: ${FRONTEND_URL:?}
+  BACKEND_URL: ${BACKEND_URL:?}
+services:
+  postgres:
+    <<: *common
+    env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/postgres.env]
+    image: pgvector/pgvector:pg16
+    environment: {POSTGRES_DB: "${POSTGRES_DATABASE:?}", POSTGRES_USER: "${POSTGRES_USERNAME:?}"}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      retries: 20
+  redis:
+    <<: *common
+    env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/redis.env]
+    image: redis:7-alpine
+    command: [sh, -c, 'exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes']
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      retries: 20
+  rabbitmq:
+    <<: *common
+    env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/rabbitmq.env]
+    image: rabbitmq:3-alpine
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 15s
+      retries: 20
+  clickhouse:
+    <<: *common
+    env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/clickhouse.env]
+    image: clickhouse/clickhouse-server:latest
+    environment: {CLICKHOUSE_USER: "${CLICKHOUSE_USERNAME:?}", CLICKHOUSE_DB: "${CLICKHOUSE_DATABASE:?}"}
+    volumes: [clickhouse_data:/var/lib/clickhouse]
+    healthcheck:
+      test: [CMD-SHELL, 'clickhouse-client --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --query "SELECT 1" >/dev/null']
+      interval: 10s
+      retries: 20
+  evo-auth:
+    <<: *common
+    env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/evo-auth.env]
+    build: {context: ../../evo-auth-service-community, args: {RAILS_ENV: production}}
+    environment:
+      <<: *rails
+      DOORKEEPER_JWT_ALGORITHM: hs256
+      DOORKEEPER_JWT_ISS: evo-auth-service
+      OAUTH_REDIRECT_URI: ${FRONTEND_URL:?}/oauth/callback
+    entrypoint: [/usr/local/bin/evo-auth-entrypoint]
+    command: [bundle, exec, rails, server, -b, 0.0.0.0, -p, "3001"]
+    volumes: [auth_storage:/rails/storage, ./bootstrap_auth.rb:/opt/artgenial/bootstrap_auth.rb:ro, ./mark_auth_migrations.rb:/opt/artgenial/mark_auth_migrations.rb:ro]
+    depends_on: {postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:3001/health]
+      interval: 30s
+      retries: 5
+  evo-auth-sidekiq:
+    <<: *common
+    env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/evo-auth-sidekiq.env]
+    build: {context: ../../evo-auth-service-community, args: {RAILS_ENV: production}}
+    environment: {<<: *rails, RUN_MIGRATIONS: "false", DOORKEEPER_JWT_ALGORITHM: hs256, DOORKEEPER_JWT_ISS: evo-auth-service}
+    entrypoint: [/usr/local/bin/evo-auth-entrypoint]
+    command: [bundle, exec, sidekiq]
+    volumes: [auth_storage:/rails/storage]
+    depends_on: {evo-auth: {condition: service_healthy}}
+  evo-crm:
+    <<: *common
+    env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/evo-crm.env]
+    build: {context: ../../evo-ai-crm-community, dockerfile: docker/Dockerfile, args: {RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}}
+    environment:
+      <<: *rails
+      AUTH_SERVICE_URL: ${AUTH_SERVICE_URL:?}
+      CORS_ORIGINS: ${CORS_ORIGINS:?}
+      EVO_AUTH_SERVICE_URL: http://evo-auth:3001
+      EVO_AI_CORE_SERVICE_URL: http://evo-core:5555
+      BOT_RUNTIME_URL: http://evo-bot-runtime:8080
+      BOT_RUNTIME_POSTBACK_BASE_URL: http://evo-crm:3000
+      EVO_FLOW_ENABLED: "true"
+      EVO_FLOW_API_URL: http://evo-flow:3334/api/v1
+      EVO_FLOW_ALLOW_INSECURE: "false"
+      ACTIVE_STORAGE_SERVICE: local
+    entrypoint: [/app/docker/entrypoints/rails.sh]
+    command: [bundle, exec, rails, s, -p, "3000", -b, 0.0.0.0]
+    volumes: [crm_storage:/app/storage, crm_cache:/app/tmp/cache, ./bootstrap_base.rb:/opt/artgenial/bootstrap_base.rb:ro]
+    depends_on: {evo-auth: {condition: service_healthy}}
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:3000/health/live]
+      interval: 30s
+      retries: 5
+  evo-crm-sidekiq:
+    <<: *common
+    env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/evo-crm-sidekiq.env]
+    build: {context: ../../evo-ai-crm-community, dockerfile: docker/Dockerfile, args: {RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}}
+    environment: {<<: *rails, RUN_MIGRATIONS: "false", EVO_AUTH_SERVICE_URL: "http://evo-auth:3001", EVO_FLOW_API_URL: "http://evo-flow:3334/api/v1", EVO_FLOW_ENABLED: "true", EVO_FLOW_ALLOW_INSECURE: "false", BOT_RUNTIME_URL: "http://evo-bot-runtime:8080", BOT_RUNTIME_POSTBACK_BASE_URL: "http://evo-crm:3000"}
+    entrypoint: [/app/docker/entrypoints/rails.sh]
+    command: [bundle, exec, sidekiq, -C, config/sidekiq.yml]
+    volumes: [crm_storage:/app/storage, crm_cache:/app/tmp/cache]
+    depends_on: {evo-crm: {condition: service_healthy}}
+  evo-core:
+    <<: *common
+    env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/evo-core.env]
+    build: {context: ../../evo-ai-core-service-community}
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USERNAME:?}
+      DB_NAME: ${POSTGRES_DATABASE:?}
+      DB_SSLMODE: disable
+      PORT: "5555"
+      EVOLUTION_BASE_URL: http://evo-crm:3000
+      EVO_AUTH_BASE_URL: http://evo-auth:3001
+      AI_PROCESSOR_URL: http://evo-processor:8000
+      AI_PROCESSOR_VERSION: v1
+    depends_on: {postgres: {condition: service_healthy}}
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:5555/health]
+      interval: 15s
+      retries: 5
+  evo-processor:
+    <<: *common
+    env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/evo-processor.env]
+    build: {context: ../../evo-ai-processor-community}
+    entrypoint: [sh, /opt/artgenial/processor-entrypoint.sh]
+    command: [sh, -c, 'alembic upgrade head && python -m scripts.run_seeders && exec uvicorn src.main:app --host "$$HOST" --port "$$PORT"']
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      REDIS_SSL: "false"
+      HOST: 0.0.0.0
+      PORT: "8000"
+      DEBUG: "false"
+      EVO_AI_CRM_URL: http://evo-crm:3000
+      CORE_SERVICE_URL: http://evo-core:5555/api/v1
+      EVO_AUTH_BASE_URL: http://evo-auth:3001
+      API_URL: ${API_URL:?}
+      APP_URL: ${APP_URL:?}
+    volumes: [processor_logs:/app/logs, ./processor-entrypoint.sh:/opt/artgenial/processor-entrypoint.sh:ro]
+    depends_on: {evo-auth: {condition: service_healthy}, redis: {condition: service_healthy}}
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:8000/health]
+      interval: 30s
+      retries: 5
+  evo-bot-runtime:
+    <<: *common
+    env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/evo-bot-runtime.env]
+    build: {context: ../../evo-bot-runtime}
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8080
+      AI_PROCESSOR_URL: http://evo-processor:8000
+      MEDIA_HOST_ALLOWLIST: ${MEDIA_HOST_ALLOWLIST:?}
+      AI_CALL_TIMEOUT_SECONDS: "90"
+    entrypoint: [sh, /opt/artgenial/bot-entrypoint.sh]
+    volumes: [./bot-entrypoint.sh:/opt/artgenial/bot-entrypoint.sh:ro]
+    depends_on: {evo-processor: {condition: service_healthy}}
+  evo-flow:
+    <<: *common
+    env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/evo-flow.env]
+    build: {context: ../../evo-flow-community}
+    entrypoint: [sh, /opt/artgenial/flow-entrypoint.sh]
+    volumes: [./flow-entrypoint.sh:/opt/artgenial/flow-entrypoint.sh:ro]
+    environment:
+      NODE_ENV: production
+      RUN_MODE: api
+      QUEUE_MODE: direct
+      STORAGE_MODE: clickhouse
+      WRITE_MODE: ch-sync
+      PORT: "3334"
+      BROKER_TYPE: rabbitmq
+      EVO_AUTH_SERVICE_URL: http://evo-auth:3001
+      EVO_AUTH_VALIDATE_TOKEN_ENDPOINT: /api/v1/auth/validate
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:?}
+      CLICKHOUSE_USERNAME: ${CLICKHOUSE_USERNAME:?}
+      CLICKHOUSE_TABLE: contact_events
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "4"
+      POSTGRES_DB_HOST: postgres
+      POSTGRES_DB_PORT: "5432"
+      POSTGRES_DB_USERNAME: ${POSTGRES_USERNAME:?}
+      POSTGRES_DB_DATABASE: ${FLOW_DATABASE:?}
+      EVOAI_CRM_BASE_URL: http://evo-crm:3000
+    depends_on: {clickhouse: {condition: service_healthy}, rabbitmq: {condition: service_healthy}, postgres: {condition: service_healthy}}
+    healthcheck:
+      test: [CMD, node, -e, "require('http').get('http://127.0.0.1:3334/health',r=>{if(r.statusCode!==200)throw Error(r.statusCode)})"]
+      interval: 30s
+      retries: 5
+  evo-frontend:
+    <<: *common
+    build: {context: ../../evo-ai-frontend-community}
+    environment:
+      VITE_APP_ENV: production
+      VITE_API_URL: ${VITE_API_URL:?}
+      VITE_AUTH_API_URL: ${VITE_AUTH_API_URL:?}
+      VITE_WS_URL: ${VITE_WS_URL:?}
+      VITE_EVOAI_API_URL: ${VITE_EVOAI_API_URL:?}
+      VITE_AGENT_PROCESSOR_URL: ${VITE_AGENT_PROCESSOR_URL:?}
+      VITE_EVOFLOW_API_URL: ${VITE_EVOFLOW_API_URL:?}
+    depends_on: {evo-crm: {condition: service_healthy}}
+  ingress:
+    <<: *common
+    image: caddy:2-alpine
+    environment:
+      FRONTEND_HOST: ${FRONTEND_HOST:?}
+      CRM_API_HOST: ${CRM_API_HOST:?}
+      AUTH_API_HOST: ${AUTH_API_HOST:?}
+      CORE_API_HOST: ${CORE_API_HOST:?}
+      PROCESSOR_API_HOST: ${PROCESSOR_API_HOST:?}
+      FLOW_API_HOST: ${FLOW_API_HOST:?}
+    ports: ["80:80", "443:443"]
+    volumes: [./Caddyfile:/etc/caddy/Caddyfile:ro, caddy_data:/data, caddy_config:/config]
+    depends_on: [evo-frontend, evo-auth, evo-crm, evo-core, evo-processor, evo-flow]
+networks:
+  private: {}
+volumes:
+  postgres_data: {}
+  redis_data: {}
+  rabbitmq_data: {}
+  clickhouse_data: {}
+  auth_storage: {}
+  crm_storage: {}
+  crm_cache: {}
+  processor_logs: {}
+  caddy_data: {}
+  caddy_config: {}

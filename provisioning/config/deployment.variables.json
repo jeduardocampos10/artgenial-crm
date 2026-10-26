@@ -7,9 +7,9 @@
     {"name":"SECRET_KEY_BASE","classification":"secret_reference","services":["evo-auth","evo-auth-sidekiq","evo-crm","evo-crm-sidekiq"],"required":true,"source":{"kind":"installation_secret","key":"SECRET_KEY_BASE"}},
     {"name":"ENCRYPTION_KEY","classification":"secret_reference","services":["evo-crm","evo-crm-sidekiq","evo-core","evo-processor"],"required":true,"source":{"kind":"installation_secret","key":"ENCRYPTION_KEY"}},
     {"name":"DOORKEEPER_JWT_SECRET_KEY","classification":"secret_reference","services":["evo-auth","evo-auth-sidekiq"],"required":true,"source":{"kind":"installation_secret","key":"DOORKEEPER_JWT_SECRET_KEY"}},
-    {"name":"BOT_RUNTIME_SECRET","classification":"secret_reference","services":["evo-crm","evo-bot-runtime"],"required":true,"source":{"kind":"installation_secret","key":"BOT_RUNTIME_SECRET"}},
-    {"name":"EVOAI_CRM_API_TOKEN","classification":"secret_reference","services":["evo-flow"],"required":true,"source":{"kind":"installation_secret","key":"EVOAI_CRM_API_TOKEN"}},
-    {"name":"AUTH_APIKEY_INTEGRATION_LOCAL","classification":"secret_reference","services":["evo-flow"],"required":false,"required_in_production":true,"source":{"kind":"runtime_secret","key":"AUTH_APIKEY_INTEGRATION_LOCAL"}},
+    {"name":"BOT_RUNTIME_SECRET","classification":"secret_reference","services":["evo-crm","evo-crm-sidekiq","evo-bot-runtime"],"required":true,"source":{"kind":"installation_secret","key":"BOT_RUNTIME_SECRET"}},
+    {"name":"EVOAI_CRM_API_TOKEN","classification":"secret_reference","services":["evo-auth","evo-crm","evo-crm-sidekiq","evo-flow"],"required":true,"source":{"kind":"installation_secret","key":"EVOAI_CRM_API_TOKEN"}},
+    {"name":"AUTH_APIKEY_INTEGRATION_LOCAL","classification":"secret_reference","services":["evo-crm","evo-crm-sidekiq","evo-flow"],"required":false,"required_in_production":true,"source":{"kind":"runtime_secret","key":"AUTH_APIKEY_INTEGRATION_LOCAL"}},
 
     {"name":"FRONTEND_URL","classification":"domain_binding","services":["evo-auth","evo-auth-sidekiq","evo-crm","evo-crm-sidekiq"],"required":true,"source":{"kind":"domain","key":"frontend"}},
     {"name":"BACKEND_URL","classification":"domain_binding","services":["evo-auth","evo-auth-sidekiq","evo-crm","evo-crm-sidekiq"],"required":true,"source":{"kind":"domain","key":"crm_api"}},

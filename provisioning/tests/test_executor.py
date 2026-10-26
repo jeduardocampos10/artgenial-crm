@@ -293,6 +293,18 @@ class ExecutorTest(unittest.TestCase):
             with self.subTest(index=index), self.assertRaises(ExecutorError):
                 validate_manifest(bad)
 
+    def test_executor_slug_starts_with_letter_like_contract(self):
+        manifest = self.manifest()
+        manifest["installation"]["slug"] = "1-cliente"
+        with self.assertRaisesRegex(ExecutorError, "Invalid slug"):
+            validate_manifest(manifest)
+
+    def test_commercial_email_reattest_after_infrastructure_completion(self):
+        manifest = self.manifest("production")
+        state = self.progress(manifest, stop_before="INICIALIZACAO")
+        self.assertEqual(state["phases"]["INFRAESTRUTURA"], "completed")
+        self.assertEqual(attest_commercial_email(state, manifest), state)
+
 
 if __name__ == "__main__":
     unittest.main()

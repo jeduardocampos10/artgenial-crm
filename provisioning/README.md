@@ -1,6 +1,6 @@
 # Fundação do Provisionador ArtGenial
 
-Esta pasta contém um contrato de instalação, catálogos, checks futuros, validador local, dry-run e manifesto declarativo. Nenhum comando aqui instala serviços, executa migrations/seeds, grava banco, cria cliente, chama Coolify ou acessa a internet. O `setup.sh` da raiz continua sendo uma ferramenta de desenvolvimento local; ele não é o provisionador comercial.
+Esta pasta contém contrato de instalação, catálogos, checks, validador local, dry-run, manifesto declarativo, Executor Seguro e o instalador Docker Compose comercial em `commercial/`. Os comandos `provision.py` e `executor.py` não instalam serviços; `commercial/install.py` realiza a instalação quando invocado explicitamente com configuração, credenciais runtime e Docker. O `setup.sh` da raiz continua sendo uma ferramenta de desenvolvimento local; ele não é o provisionador comercial.
 
 ## Instalação isolada
 
@@ -32,6 +32,8 @@ python -m unittest discover -s provisioning/tests -v
 MailHog permanece no catálogo de 14 serviços por refletir o Compose local, mas o manifesto o marca explicitamente como ferramenta de teste, não como solução comercial de e-mail. Para produção, o manifesto registra essa escolha como pendência, sem inventar provedor SMTP. A liberação permanece bloqueada até que todos os checks obrigatórios sejam executados e aprovados; o comando local não executa esses checks.
 
 ## Fluxo futuro e barreiras de entrega
+
+O procedimento Docker Compose da Fase 2.5.5 está em [`commercial/README.md`](commercial/README.md). Os passos abaixo descrevem a ordem lógica; a execução real depende de infraestrutura, DNS, SMTP e credenciais de uma instalação nova.
 
 1. **Preparação:** registrar identidade, UUID, domínios, referências a secrets exclusivos e administrador inicial. Senha do administrador e secrets entram apenas no runtime seguro; nunca no JSON, Git, log ou saída do dry-run.
 2. **Infraestrutura:** criar a instalação isolada, serviços, volumes, rede interna, domínios públicos e variáveis no Coolify. O catálogo atual reproduz o Compose de desenvolvimento, incluindo MailHog. Uma implantação comercial precisa decidir o provedor de e-mail antes de ativar esse serviço em produção.

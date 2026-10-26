@@ -59,7 +59,7 @@ def validate_manifest(manifest):
     except (ValueError, AttributeError, TypeError) as exc:
         raise ExecutorError("Invalid installation_key") from exc
     _require(type(identity["slug"]) is str and
-             re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", identity["slug"]) is not None, "Invalid slug")
+             re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", identity["slug"]) is not None, "Invalid slug")
     _require(identity["environment"] in ("development", "staging", "production"), "Invalid environment")
     _require(type(identity["installation_name"]) is str and bool(identity["installation_name"].strip()),
              "Invalid installation_name")
@@ -148,7 +148,8 @@ def create_state(manifest):
             "secrets": {name: False for name, item in secrets.items() if item["required"]},
             "settings": {name: False for name, item in settings.items()
                          if item["required"] and item["value"] is None},
-            "services": {name: False for name in services},
+            "services": {name: False for name in services
+                         if not (identity["environment"] == "production" and name == "mailhog")},
             "initialization": {name: False for name in initialization},
             "checks": {name: None for name in checks},
             "commercial_email": False,
@@ -370,11 +371,12 @@ def record_check(state, manifest, check_id, passed):
 def attest_commercial_email(state, manifest):
     validate_state(state, manifest)
     _require(manifest["installation"]["environment"] == "production", "Commercial email is production only")
-    _require(state["phases"]["INFRAESTRUTURA"] == "in_progress", "INFRAESTRUTURA must be in progress")
     output = copy.deepcopy(state)
-    if not output["evidence"]["commercial_email"]:
-        output["evidence"]["commercial_email"] = True
-        _event(output, "attest", "INFRAESTRUTURA", "commercial_email", "true")
+    if output["evidence"]["commercial_email"]:
+        return output
+    _require(state["phases"]["INFRAESTRUTURA"] == "in_progress", "INFRAESTRUTURA must be in progress")
+    output["evidence"]["commercial_email"] = True
+    _event(output, "attest", "INFRAESTRUTURA", "commercial_email", "true")
     return output
 
 
