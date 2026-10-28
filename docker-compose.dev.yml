@@ -178,6 +178,7 @@ services:
       EVO_FLOW_API_URL: http://evo-flow:3334/api/v1
       EVO_FLOW_ALLOW_INSECURE: ${EVO_FLOW_ALLOW_INSECURE:-true}
       ACTIVE_STORAGE_SERVICE: ${ACTIVE_STORAGE_SERVICE:-local}
+      RUN_MIGRATIONS: "false"
     volumes:
       - crm_bundle:/usr/local/bundle
       - crm_node_modules:/app/node_modules
