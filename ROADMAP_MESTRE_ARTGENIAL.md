@@ -21,6 +21,20 @@ Princípio arquitetural:
 
 WhatsApp, ligações, pipelines, agentes de IA, compras, suporte, follow-ups e demais interações devem alimentar a mesma memória e o mesmo histórico do cliente.
 
+## Decisão de priorização operacional
+
+Esta decisão prevalece sobre a ordem visual das fases arquiteturais deste documento:
+
+- **Lead Capture:** capacidade existente colocada em congelamento funcional. Recebe somente correções críticas, segurança e integridade de dados.
+- **Gestão de Documentos:** adiada. Anexos de conversas não equivalem a um módulo de gestão documental.
+- Ambas só podem voltar a receber evolução funcional depois da aprovação do **Gate WhatsApp**, quando o canal prioritário cumprir 100% dos critérios objetivos definidos — não uma promessa de ausência absoluta de falhas.
+- Até esse gate, a prioridade exclusiva é tornar o WhatsApp reproduzível, seguro, observável, resiliente e validado ponta a ponta.
+- Depois do gate, a execução segue por incrementos homologáveis de **duas semanas**, começando por Suporte Multicanal e atendimento humano supervisionado.
+
+### Regra dos ciclos de duas semanas
+
+Uma fase de duas semanas entrega uma fatia vertical validável; ela não deve ser declarada concluída se seu escopo total exigir novos ciclos. Todo ciclo termina com evidências, testes, riscos residuais e decisão humana de avançar, repetir ou interromper.
+
 ---
 
 # FASE 1 — FUNDAÇÃO DO CRM
@@ -434,6 +448,10 @@ Ele coordena.
 
 ## Comercial
 
+> Fundação experimental: a skill fechada `artgenial.elite-sales.v1` e seu toggle supervisionado foram implementados em branch de trabalho, desabilitados por padrão. Isso não conclui nenhum agente comercial, autoriza apenas validação em homologação, não autoriza produção/autonomia e não altera a prioridade do Gate WhatsApp. Contrato e limitações: `docs/SKILL-VENDEDOR-ELITE-V1.md`.
+>
+> Revisão de jornada experimental: o pacote fechado `customer_journey_skill_enabled` compõe atendimento humano, intenção, recepção, inteligência de preocupações, venda consultiva, recuperação de serviço, cancelamento/retenção e sucesso/expansão. Permanece desabilitado por padrão, sem novas ferramentas ou autoridade. O método, gates de oferta e limites estão em `docs/METODO-ATENDIMENTO-VENDAS-SEM-VENDER-V1.md`.
+
 - [ ] Prospector
 - [ ] SDR / Qualificação
 - [ ] Atendimento / Consultor
@@ -442,6 +460,8 @@ Ele coordena.
 - [ ] Reativação
 
 ## Pós-venda
+
+> A fundação comportamental da jornada define onboarding, adoção, valor verificado, saúde da conta e permissão antes de recompra, cross-sell ou upsell. Ela não conclui os agentes abaixo nem implementa memória, automação ou execução comercial.
 
 - [ ] Customer Success
 - [ ] Onboarding
@@ -703,27 +723,93 @@ WhatsApp e futuramente Voz são **canais dessa inteligência**, não sistemas in
 
 # ORDEM DE EXECUÇÃO ATUAL
 
-Não pular etapas apenas para adicionar funcionalidades visualmente interessantes.
+Não pular etapas apenas para adicionar funcionalidades visualmente interessantes. Lead Capture e Gestão de Documentos permanecem fora da execução até a aprovação do Gate WhatsApp.
 
-Ordem:
+## Pré-requisito — WhatsApp 100% dos critérios
 
-1. [ ] Finalizar Fundação/WhatsApp
-2. [ ] Finalizar Provisionamento ArtGenial
-3. [ ] Construir Instalação Comercial Portável
-4. [ ] Validar instalação limpa partindo do GitHub
-5. [ ] Construir Memória Unificada
-6. [ ] Construir Intent Engine
-7. [ ] Construir Next Best Action
-8. [ ] Construir Policy + Approval Engine
-9. [ ] Construir Handoff IA → Humano
-10. [ ] Construir Orquestrador
-11. [ ] Construir Agentes Especializados
-12. [ ] Construir Automação Operacional
-13. [ ] Construir Eventos e Atribuição
-14. [ ] Construir Painel de ROI
-15. [ ] Construir IA Proativa
-16. [ ] Adicionar Voz
-17. [ ] Evoluir posteriormente para ERP
+### Ciclo WA-1 — Baseline e observabilidade (2 semanas)
+
+- [ ] Fixar matriz reproduzível de commits e submódulos
+- [ ] Escolher o provider WhatsApp prioritário
+- [ ] Separar probe somente leitura de criação/recriação de instância
+- [ ] Definir autenticação verificável de webhook
+- [ ] Correlacionar inbound, fila, IA, postback e outbound
+- [ ] Criar suíte E2E mínima e runbook
+
+### Ciclo WA-2 — Fluxo funcional completo (2 semanas)
+
+- [ ] Criar canal pelo Modo Recomendado sem expor credenciais
+- [ ] Validar QR, conexão, texto, imagem, áudio e documento
+- [ ] Validar envio, entrega, leitura e falha
+- [ ] Garantir idempotência de webhook e mensagem
+- [ ] Validar edição, desconexão e permissões
+
+### Ciclo WA-3 — Resiliência e fechamento do gate (2 semanas)
+
+- [ ] Tornar evento durável antes do aceite pelo Bot Runtime
+- [ ] Implementar retry idempotente/outbox para postback
+- [ ] Validar reconexão e reinícios controlados
+- [ ] Validar indisponibilidade, duplicidade e eventos fora de ordem
+- [ ] Ativar alertas, replay auditável e soak test
+- [ ] Aprovar formalmente todos os critérios do Gate WhatsApp
+
+## Plano de produto após o Gate WhatsApp
+
+### Fase 3 — Suporte Multicanal e humano supervisionado (2 semanas)
+
+- [ ] Consolidar fila, ownership, prioridade e SLA
+- [ ] Garantir silêncio da IA após tomada humana
+- [ ] Persistir pacote estruturado de handoff
+- [ ] Validar retorno Humano → IA somente por ação explícita
+- [ ] Iniciar Copiloto PT-BR em modo somente rascunho
+- [ ] Integrar primeiro canal adicional na mesma timeline
+
+### Fase 4 — Analytics e Automação supervisionada (2 semanas)
+
+- [ ] Versionar catálogo de eventos e IDs de correlação
+- [ ] Reconciliar métricas por canal, IA, humano e handoff
+- [ ] Adicionar shadow mode, dry-run e aprovação
+- [ ] Implementar kill switch, limites, idempotência e auditoria
+- [ ] Proibir ação sensível sem política explícita
+
+### Fase 5 — Identidade e Memória Unificadas (2 semanas)
+
+- [ ] Promover a fundação de memória existente ao baseline oficial
+- [ ] Implementar deduplicação e merge seguro
+- [ ] Conectar memória canônica ao agente inicialmente em modo somente leitura
+- [ ] Preservar fato, inferência, evidência, validade e consentimento
+
+### Fase 6 — Intent Engine e Next Best Action em modo sugestão (2 semanas)
+
+- [ ] Produzir intenção, subintenção, urgência, sentimento e confiança
+- [ ] Produzir recomendação estruturada com evidência e justificativa
+- [ ] Avaliar offline e encaminhar baixa confiança para humano
+- [ ] Não executar ações automaticamente nesta fase
+
+### Fase 7 — Policy, Approval e Handoff inteligente (2 semanas)
+
+- [ ] Aplicar níveis sugerir, aprovar e automático dentro das regras
+- [ ] Bloquear ações proibidas e impor limites por risco
+- [ ] Tornar handoff e cancelamento de gerações pendentes atômicos
+- [ ] Registrar aprovação, rejeição, edição e decisão
+
+### Fase 8 — Orquestrador e especialista piloto (2 semanas)
+
+- [ ] Coordenar um especialista piloto sem criar memória isolada
+- [ ] Revisar 100% das ações externas no piloto
+- [ ] Medir qualidade PT-BR, escalonamento e falhas
+- [ ] Expandir somente após aprovação humana
+
+### Fase 9 — Eventos, Atribuição e ROI (2 semanas)
+
+- [ ] Relacionar Cliente → Evento → Agente → Ação → Resultado
+- [ ] Separar resultado atribuído de resultado influenciado
+- [ ] Exigir evidência rastreável para receita
+- [ ] Disponibilizar drill-down até conversa e evento de origem
+
+## Backlog condicionado
+
+Depois da aprovação do Gate WhatsApp, Lead Capture e Gestão de Documentos podem ser reavaliados, mas não entram automaticamente na execução. Voz, IA proativa e ERP continuam futuros e dependem dos gates de dados, automação, IA supervisionada e ROI.
 
 ---
 
