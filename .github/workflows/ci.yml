@@ -11,7 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          token: ${{ secrets.ARTGENIAL_SUBMODULES_TOKEN }}
           submodules: recursive
+          persist-credentials: false
 
       - name: Seed .env from example
         run: cp .env.example .env
@@ -25,7 +27,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          token: ${{ secrets.ARTGENIAL_SUBMODULES_TOKEN }}
           submodules: recursive
+          persist-credentials: false
 
       - name: Lint Auth Dockerfile
         uses: hadolint/hadolint-action@v3.1.0
@@ -63,7 +67,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          token: ${{ secrets.ARTGENIAL_SUBMODULES_TOKEN }}
           submodules: recursive
+          persist-credentials: false
 
       - name: Run migration collision guard
         run: ./scripts/check_migration_collision.sh
