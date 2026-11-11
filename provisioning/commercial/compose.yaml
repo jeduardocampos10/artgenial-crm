@@ -2,6 +2,17 @@ name: ${ARTGENIAL_PROJECT:?}
 x-common: &common
   networks: [private]
   restart: unless-stopped
+  init: true
+  security_opt: [no-new-privileges:true]
+  pids_limit: 1024
+  mem_limit: 4g
+  cpus: 2.0
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "5"}
+  labels:
+    com.artgenial.installation_key: ${INSTALLATION_KEY:?}
 x-rails: &rails
   RAILS_ENV: production
   RUN_MIGRATIONS: "true"

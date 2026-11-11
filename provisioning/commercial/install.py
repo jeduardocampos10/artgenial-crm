@@ -3,6 +3,7 @@
 
 import argparse
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -105,6 +106,13 @@ def verify_smtp(runtime):
         raise InstallError("Commercial SMTP verification failed") from None
 
 
+def installation_project_name(slug, installation_key):
+    """A stable Compose namespace unique to one installation, not merely a client slug."""
+    safe_slug = re.sub(r"[^a-z0-9_-]+", "_", slug.lower()).strip("_-")[:36]
+    identity = hashlib.sha256(installation_key.encode("utf-8")).hexdigest()[:12]
+    return f"artgenial_{safe_slug}_{identity}"
+
+
 def prepare(config_path, runtime_path, state_path):
     config = provision.load_json(config_path)
     contract, catalog, checks = map(provision.load_json, (provision.CONTRACT, provision.CATALOG, provision.CHECKS))
@@ -127,7 +135,7 @@ def prepare(config_path, runtime_path, state_path):
     settings = {entry["name"]: entry["value"] for entry in manifest["variables"]["environment_setting"]}
     domains = {entry["name"]: entry["value"] for entry in manifest["variables"]["domain_binding"]}
     env = {**{key: value for key, value in os.environ.items() if key in HOST_ENV_KEYS}, **settings, **domains,
-           "ARTGENIAL_PROJECT": "artgenial_" + config["slug"].replace("-", "_"),
+           "ARTGENIAL_PROJECT": installation_project_name(config["slug"], config["installation_key"]),
            "FRONTEND_HOST": config["domains"]["frontend"].split("://", 1)[1],
            "CRM_API_HOST": config["domains"]["crm_api"].split("://", 1)[1],
            "AUTH_API_HOST": config["domains"]["auth_api"].split("://", 1)[1],

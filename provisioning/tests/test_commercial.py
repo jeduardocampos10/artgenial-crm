@@ -41,6 +41,11 @@ class CommercialInstallerTest(unittest.TestCase):
         self.assertEqual(manifest["variables"]["environment_setting"][-1]["status"], "resolved_by_commercial_policy")
         self.assertEqual(env["VITE_WS_URL"], self.config["domains"]["crm_api"])
         self.assertEqual(env["POSTGRES_DATABASE"], "artgenial_cliente_alfa")
+        self.assertEqual(
+            env["ARTGENIAL_PROJECT"],
+            install.installation_project_name(self.config["slug"], self.config["installation_key"]),
+        )
+        self.assertRegex(env["ARTGENIAL_PROJECT"], r"^artgenial_cliente-alfa_[0-9a-f]{12}$")
         self.assertNotEqual(env["FLOW_DATABASE"], env["POSTGRES_DATABASE"])
         self.assertLessEqual(len(env["FLOW_DATABASE"]), 63)
         self.assertEqual(runtime, self.runtime)
@@ -53,6 +58,14 @@ class CommercialInstallerTest(unittest.TestCase):
             self.assertNotIn(value, serialized)
             self.assertNotIn(value, json.dumps(env))
         self.assertEqual(executor.resume_state(json.loads(self.state_path.read_text(encoding="utf-8")), manifest), state)
+
+    def test_compose_namespace_is_unique_per_installation_not_only_slug(self):
+        first = install.installation_project_name("cliente-alfa", "installation-a")
+        second = install.installation_project_name("cliente-alfa", "installation-b")
+
+        self.assertNotEqual(first, second)
+        self.assertEqual(first, install.installation_project_name("cliente-alfa", "installation-a"))
+        self.assertLessEqual(len(first), 63)
 
     def test_runtime_rejects_insecure_mail_and_admin_password(self):
         for key, value in (("SMTP_ADDRESS", "localhost"), ("SMTP_ADDRESS", "mailhog"),
@@ -86,9 +99,23 @@ class CommercialInstallerTest(unittest.TestCase):
         self.assertIn("VITE_WS_URL: ${VITE_WS_URL:?}", source)
         self.assertNotIn("wss://${VITE_WS_URL", source)
         self.assertIn("networks: [private]", source)
+        self.assertIn("com.artgenial.installation_key: ${INSTALLATION_KEY:?}", source)
         common = source.split("x-common: &common\n", 1)[1].split("x-rails: &rails", 1)[0]
+        for hardening in (
+            "init: true",
+            "security_opt: [no-new-privileges:true]",
+            "pids_limit: 1024",
+            "mem_limit: 4g",
+            "cpus: 2.0",
+            "stop_grace_period: 30s",
+            "driver: json-file",
+            'options: {max-size: 10m, max-file: "5"}',
+        ):
+            self.assertIn(hardening, common)
         self.assertNotIn("env_file", common)
         self.assertNotIn("ARTGENIAL_RUNTIME_ENV_FILE", source)
+        for forbidden in ("privileged: true", "network_mode: host", "/var/run/docker.sock"):
+            self.assertNotIn(forbidden, source)
         self.assertEqual(source.count('ports: ["80:80", "443:443"]'), 1)
         for service in ("postgres", "redis", "rabbitmq", "clickhouse"):
             block = re.split(r"\n  [a-z][a-z0-9-]*:\n", source.split(f"  {service}:\n", 1)[1], maxsplit=1)[0]
