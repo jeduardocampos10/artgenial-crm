@@ -10,6 +10,9 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from provisioning.scripts import recovery
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "config" / "installation.contract.json"
@@ -18,6 +21,7 @@ CHECKS = ROOT / "checks" / "required.json"
 EXAMPLE = ROOT / "config" / "installation.example.json"
 DEPLOYMENT_VARIABLES = ROOT / "config" / "deployment.variables.json"
 COMMERCIAL_RUNTIME = ROOT / "config" / "commercial.runtime.json"
+COMMERCIAL_RECOVERY = ROOT / "config" / "commercial.recovery.json"
 REFERENCE_PATTERN = re.compile(r"^runtime:[A-Z][A-Z0-9_]*$")
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 HOST_PATTERN = re.compile(r"^(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$")
@@ -248,7 +252,9 @@ def plan(config, catalog, checks):
         target = domain + check.get("path", "")
         variable = f" [{check['variable']}]" if "variable" in check else ""
         lines.append(f"  Verificar {check['id']}{variable}: {target} ({check['kind']})")
-    lines.extend(["ENTREGA", "  Liberar CRM somente após todos os checks obrigatórios passarem"])
+    if config["environment"] == "production":
+        lines.append("  Validar evidência de backup externo e restore isolado; não executar ou simular backup")
+    lines.extend(["ENTREGA", "  Liberar CRM somente após todos os gates obrigatórios passarem"])
     return "\n".join(lines)
 
 
@@ -431,8 +437,11 @@ def _commercial_setting(name, config, policy):
     return urlsplit(config["domains"]["crm_api"]).hostname, source
 
 
-def build_manifest(config, catalog, checks, variables_catalog, commercial_policy=None):
+def build_manifest(config, catalog, checks, variables_catalog, commercial_policy=None, recovery_policy=None):
     """Build data only; caller validates first and decides whether to print it."""
+    if recovery_policy is None:
+        recovery_policy = load_json(COMMERCIAL_RECOVERY)
+    recovery.validate_policy(recovery_policy)
     services = {service["name"]: service for service in catalog["services"]}
     infrastructure = []
     for service in catalog["services"]:
@@ -494,14 +503,16 @@ def build_manifest(config, catalog, checks, variables_catalog, commercial_policy
         validation.append(entry)
     if production:
         pending.append("Select a commercial email solution; MailHog is for local testing only")
+        pending.append("Provide valid external backup and isolated restore evidence")
     pending.append("Execute and pass all required public and account checks")
     return {
-        "manifest_version": 1,
+        "manifest_version": 2,
         "installation": {key: config[key] for key in (
             "installation_name", "slug", "installation_key", "environment"
         )},
         "infrastructure": infrastructure,
         "public_endpoints": {key: config["domains"][key].rstrip("/") for key in sorted(config["domains"])},
+        "recovery": recovery_policy,
         "variables": variables,
         "initialization": [
             {"id": "migrations", "action": "run_for_new_isolated_installation", "executed": False},
@@ -511,7 +522,7 @@ def build_manifest(config, catalog, checks, variables_catalog, commercial_policy
              "template_version": "1", "installation_key": config["installation_key"], "executed": False},
         ],
         "validation": validation,
-        "delivery": {"ready": False, "release_rule": "all_required_checks_pass",
+        "delivery": {"ready": False, "release_rule": "all_required_gates_pass",
                      "required_check_ids": sorted(check["id"] for check in checks["checks"] if check["required"]),
                      "pending_requirements": sorted(pending)},
     }
@@ -523,6 +534,7 @@ def main(argv=None):
     parser.add_argument("--config", type=Path, default=EXAMPLE)
     args = parser.parse_args(argv)
     commercial_policy = None
+    recovery_policy = None
     try:
         contract, catalog, checks = load_json(CONTRACT), load_json(CATALOG), load_json(CHECKS)
         config = load_json(args.config)
@@ -530,6 +542,12 @@ def main(argv=None):
         if args.command == "manifest" and not errors:
             variables_catalog = load_json(DEPLOYMENT_VARIABLES)
             errors = validate_deployment_catalog(variables_catalog, contract, catalog, checks)
+            if not errors:
+                recovery_policy = load_json(COMMERCIAL_RECOVERY)
+                try:
+                    recovery.validate_policy(recovery_policy)
+                except recovery.RecoveryError as exc:
+                    errors.append(str(exc))
             if not errors and config["environment"] == "production":
                 commercial_policy = load_json(COMMERCIAL_RUNTIME)
                 errors = validate_commercial_policy(commercial_policy)
@@ -545,7 +563,8 @@ def main(argv=None):
     elif args.command == "plan":
         print(plan(config, catalog, checks))
     else:
-        print(json.dumps(build_manifest(config, catalog, checks, variables_catalog, commercial_policy),
+        print(json.dumps(build_manifest(config, catalog, checks, variables_catalog, commercial_policy,
+                                        recovery_policy),
                          ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 

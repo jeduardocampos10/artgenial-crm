@@ -2,10 +2,12 @@ import copy
 import hashlib
 import json
 import unittest
+from datetime import datetime, timezone
 
+from provisioning.scripts import recovery
 from provisioning.scripts.executor import (
     ExecutorError, PHASES, attest_commercial_email, attest_initialization,
-    attest_secret, attest_service, attest_setting, block_phase,
+    attest_recovery, attest_secret, attest_service, attest_setting, block_phase,
     complete_delivery, complete_phase, create_state, delivery_blockers,
     fail_phase, manifest_fingerprint, record_check, resume_state, retry_phase,
     start_phase, validate_manifest, validate_state,
@@ -35,8 +37,25 @@ class ExecutorTest(unittest.TestCase):
         policy = load_json(COMMERCIAL_RUNTIME) if environment == "production" else None
         return build_manifest(config, self.catalog, self.checks, self.variables_catalog, policy)
 
+    def recovery_receipt(self, manifest):
+        timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        required = sorted(item["id"] for item in manifest["recovery"]["inventory"]
+                          if item["backup_required"])
+        receipt = {
+            "schema_version": 1,
+            "installation_key": manifest["installation"]["installation_key"],
+            "backup": {"executed_at": timestamp, "destination": "s3://backup-bucket/client/artifact",
+                       "encrypted": True, "artifact_sha256": "a" * 64, "inventory": required},
+            "restore": {"executed_at": timestamp, "target_id": "isolated-recovery-run-1",
+                        "target_environment": "recovery_test", "isolated": True,
+                        "source_sha256": "a" * 64, "verified_inventory": required,
+                        "verification_sha256": "b" * 64},
+        }
+        receipt["evidence_sha256"] = recovery.canonical_hash(receipt)
+        return receipt
+
     def progress(self, manifest, stop_before=None, failed_check=None, omitted_secret=None,
-                 omitted_setting=None, omit_email=False):
+                 omitted_setting=None, omit_email=False, omit_recovery=False):
         state = create_state(manifest)
         for phase in PHASES[:-1]:
             if phase == stop_before:
@@ -62,6 +81,8 @@ class ExecutorTest(unittest.TestCase):
             else:
                 for name in state["evidence"]["checks"]:
                     state = record_check(state, manifest, name, name != failed_check)
+                if manifest["installation"]["environment"] == "production" and not omit_recovery:
+                    state = attest_recovery(state, manifest, self.recovery_receipt(manifest))
             state = complete_phase(state, manifest, phase)
         return state
 
@@ -90,7 +111,7 @@ class ExecutorTest(unittest.TestCase):
             changed["installation"][field] = value
             with self.subTest(field=field), self.assertRaises(ExecutorError):
                 resume_state(state, changed)
-        for field, value in (("state_version", 2), ("phases", {**state["phases"], "PREPARACAO": "arbitrary"}),
+        for field, value in (("state_version", 1), ("phases", {**state["phases"], "PREPARACAO": "arbitrary"}),
                              ("delivery", {"ready": True})):
             changed = copy.deepcopy(state)
             changed[field] = value
@@ -268,11 +289,37 @@ class ExecutorTest(unittest.TestCase):
             state = self.progress(manifest)
             self.assertTrue(complete_delivery(state, manifest)["delivery"]["ready"])
 
+    def test_production_delivery_fails_closed_without_recovery_evidence(self):
+        manifest = self.manifest("production")
+        state = self.progress(manifest, omit_recovery=True)
+        self.assertEqual(state["recovery"]["execution"], {"backup": False, "isolated_restore": False})
+        self.assertIsNone(state["recovery"]["evidence"])
+        self.assertIn("recovery_evidence", delivery_blockers(state, manifest))
+        with self.assertRaisesRegex(ExecutorError, "recovery_evidence"):
+            complete_delivery(state, manifest)
+
+    def test_recovery_attestation_binds_receipt_and_audit(self):
+        manifest = self.manifest("production")
+        state = self.progress(manifest)
+        receipt = state["recovery"]["evidence"]
+        self.assertEqual(receipt["installation_key"], manifest["installation"]["installation_key"])
+        self.assertTrue(state["recovery"]["execution"]["backup"])
+        self.assertTrue(state["recovery"]["execution"]["isolated_restore"])
+        event = next(item for item in state["audit"] if item["subject"] == "recovery")
+        self.assertEqual(event["result"], receipt["evidence_sha256"])
+        delivered = complete_delivery(state, manifest)
+        self.assertTrue(validate_state(delivered, manifest))
+        self.assertEqual(complete_delivery(delivered, manifest), delivered)
+        tampered = copy.deepcopy(state)
+        tampered["recovery"]["evidence"]["backup"]["artifact_sha256"] = "c" * 64
+        with self.assertRaises(ExecutorError):
+            validate_state(tampered, manifest)
+
     def test_manifest_boundary_rejects_unsafe_shape(self):
         manifest = self.manifest()
         mutations = []
         bad = copy.deepcopy(manifest)
-        bad["manifest_version"] = 2
+        bad["manifest_version"] = 1
         mutations.append(bad)
         bad = copy.deepcopy(manifest)
         bad["infrastructure"][0]["host_port"] = 5432

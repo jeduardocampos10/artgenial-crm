@@ -9,6 +9,8 @@ import json
 import re
 import uuid
 
+from provisioning.scripts import recovery
+
 
 PHASES = ("PREPARACAO", "INFRAESTRUTURA", "INICIALIZACAO", "VALIDACAO", "ENTREGA")
 STATUSES = frozenset(("pending", "in_progress", "completed", "blocked", "failed"))
@@ -16,6 +18,7 @@ PUBLIC_KEYS = frozenset(("frontend", "crm_api", "auth_api", "core_api", "process
 PRIVATE_SERVICES = frozenset(("postgres", "redis", "rabbitmq", "clickhouse", "evo-bot-runtime", "mailhog"))
 EMAIL_PENDING = "Select a commercial email solution; MailHog is for local testing only"
 CHECKS_PENDING = "Execute and pass all required public and account checks"
+RECOVERY_PENDING = "Provide valid external backup and isolated restore evidence"
 
 
 class ExecutorError(ValueError):
@@ -48,8 +51,8 @@ def manifest_fingerprint(manifest):
 
 def validate_manifest(manifest):
     _keys(manifest, ("manifest_version", "installation", "infrastructure", "public_endpoints",
-                     "variables", "initialization", "validation", "delivery"), "manifest")
-    _require(type(manifest["manifest_version"]) is int and manifest["manifest_version"] == 1,
+                     "recovery", "variables", "initialization", "validation", "delivery"), "manifest")
+    _require(type(manifest["manifest_version"]) is int and manifest["manifest_version"] == 2,
              "Unsupported manifest_version")
     identity = manifest["installation"]
     _keys(identity, ("installation_name", "installation_key", "slug", "environment"), "installation")
@@ -87,6 +90,10 @@ def validate_manifest(manifest):
              == PUBLIC_KEYS, "Public service domains do not match endpoints")
     _require(services["mailhog"].get("commercial_email_solution") is False,
              "MailHog cannot be a commercial email solution")
+    try:
+        recovery.validate_policy(manifest["recovery"])
+    except recovery.RecoveryError as exc:
+        raise ExecutorError(str(exc)) from exc
 
     variables = manifest["variables"]
     _keys(variables, ("secret_reference", "domain_binding", "internal_service_binding",
@@ -113,7 +120,7 @@ def validate_manifest(manifest):
         _require(type(check.get("required")) is bool, "Invalid check required flag")
     delivery = manifest["delivery"]
     _keys(delivery, ("ready", "release_rule", "required_check_ids", "pending_requirements"), "delivery")
-    _require(delivery["ready"] is False and delivery["release_rule"] == "all_required_checks_pass",
+    _require(delivery["ready"] is False and delivery["release_rule"] == "all_required_gates_pass",
              "Manifest delivery must start unready")
     required_checks = {name for name, item in checks.items() if item["required"]}
     ids = delivery["required_check_ids"]
@@ -125,7 +132,7 @@ def validate_manifest(manifest):
                          if item["required"] and item["value"] is None}
     expected_pending.add(CHECKS_PENDING)
     if identity["environment"] == "production":
-        expected_pending.add(EMAIL_PENDING)
+        expected_pending.update((EMAIL_PENDING, RECOVERY_PENDING))
     pending = delivery["pending_requirements"]
     _require(type(pending) is list and len(pending) == len(set(pending)) and set(pending) == expected_pending,
              "Unknown or missing delivery requirement")
@@ -140,7 +147,7 @@ def create_state(manifest):
     services, secrets, settings, initialization, checks = validate_manifest(manifest)
     identity = manifest["installation"]
     return {
-        "state_version": 1,
+        "state_version": 2,
         "installation": {name: identity[name] for name in ("installation_key", "slug", "environment")},
         "manifest_fingerprint": {"algorithm": "sha256", "value": manifest_fingerprint(manifest)},
         "phases": {phase: "pending" for phase in PHASES},
@@ -154,6 +161,12 @@ def create_state(manifest):
             "checks": {name: None for name in checks},
             "commercial_email": False,
         },
+        "recovery": {
+            "contract": {"policy_version": manifest["recovery"]["policy_version"],
+                         "sha256": recovery.canonical_hash(manifest["recovery"])},
+            "execution": {"backup": False, "isolated_restore": False},
+            "evidence": None,
+        },
         "audit": [],
         "delivery": {"ready": False},
     }
@@ -162,7 +175,7 @@ def create_state(manifest):
 def validate_state(state, manifest):
     expected = create_state(manifest)
     _keys(state, expected, "state")
-    _require(type(state["state_version"]) is int and state["state_version"] == 1,
+    _require(type(state["state_version"]) is int and state["state_version"] == 2,
              "Unsupported state_version")
     _keys(state["installation"], expected["installation"], "state installation")
     for field in expected["installation"]:
@@ -185,18 +198,44 @@ def validate_state(state, manifest):
             _require(value is None or type(value) is bool if category == "checks" else type(value) is bool,
                      f"Invalid {category} evidence")
     _require(type(state["evidence"]["commercial_email"]) is bool, "Invalid commercial email evidence")
+    _keys(state["recovery"], ("contract", "execution", "evidence"), "state recovery")
+    _require(state["recovery"]["contract"] == expected["recovery"]["contract"],
+             "Recovery contract mismatch")
+    _keys(state["recovery"]["execution"], ("backup", "isolated_restore"), "recovery execution")
+    executed = state["recovery"]["execution"]
+    _require(all(type(value) is bool for value in executed.values()) and
+             executed["backup"] == executed["isolated_restore"], "Invalid recovery execution state")
+    if state["recovery"]["evidence"] is None:
+        _require(not executed["backup"], "Recovery execution lacks evidence")
+    else:
+        _require(executed["backup"], "Recovery evidence lacks execution state")
+        try:
+            recovery.validate_evidence(state["recovery"]["evidence"], manifest["recovery"],
+                                       manifest["installation"]["installation_key"], enforce_age=False)
+        except recovery.RecoveryError as exc:
+            raise ExecutorError(str(exc)) from exc
     _require(type(state["audit"]) is list, "Invalid audit")
     for sequence, event in enumerate(state["audit"], 1):
         _keys(event, ("sequence", "action", "phase", "subject", "result"), "audit event")
         _require(type(event["sequence"]) is int and event["sequence"] == sequence and
                  event["action"] in ("start", "complete", "block", "fail", "retry", "attest") and
                  event["phase"] in PHASES and type(event["subject"]) is str and
-                 event["result"] in ("in_progress", "completed", "blocked", "failed", "pending", "true", "false"),
+                 (event["result"] in ("in_progress", "completed", "blocked", "failed", "pending", "true", "false")
+                  or (event["subject"] == "recovery" and type(event["result"]) is str
+                      and recovery.SHA256_PATTERN.fullmatch(event["result"]))),
                  "Invalid audit event")
     replay = copy.deepcopy(expected)
     for event in state["audit"]:
         phase, action, subject, result = (event[name] for name in ("phase", "action", "subject", "result"))
         if action == "attest":
+            if subject == "recovery":
+                receipt = state["recovery"]["evidence"]
+                _require(phase == "VALIDACAO" and replay["phases"][phase] == "in_progress"
+                         and receipt is not None and result == receipt["evidence_sha256"],
+                         "Invalid recovery attestation")
+                replay["recovery"]["execution"] = {"backup": True, "isolated_restore": True}
+                replay["recovery"]["evidence"] = copy.deepcopy(receipt)
+                continue
             _require(result in ("true", "false"), "Invalid attestation result")
             category = {"PREPARACAO": ("secrets", "settings"),
                         "INFRAESTRUTURA": ("services",),
@@ -250,8 +289,17 @@ def validate_state(state, manifest):
         else:
             raise ExecutorError("Invalid audit action")
         replay["phases"][phase] = result
+    recovery_events = [event for event in state["audit"] if event["action"] == "attest"
+                       and event["subject"] == "recovery"]
+    if state["recovery"]["evidence"] is None:
+        _require(not recovery_events, "Recovery audit lacks evidence")
+    else:
+        _require(len(recovery_events) == 1 and recovery_events[0]["result"] ==
+                 state["recovery"]["evidence"]["evidence_sha256"],
+                 "Recovery evidence does not match audit")
     _require(replay["phases"] == state["phases"] and replay["evidence"] == state["evidence"] and
-             replay["delivery"] == state["delivery"], "State does not match audit")
+             replay["recovery"] == state["recovery"] and replay["delivery"] == state["delivery"],
+             "State does not match audit")
     _keys(state["delivery"], ("ready",), "state delivery")
     _require(type(state["delivery"]["ready"]) is bool, "Invalid delivery readiness")
     completed = state["phases"]["ENTREGA"] == "completed"
@@ -380,6 +428,27 @@ def attest_commercial_email(state, manifest):
     return output
 
 
+def attest_recovery(state, manifest, receipt, *, now=None):
+    """Record a validated receipt; this function performs no backup or restore."""
+    validate_state(state, manifest)
+    _require(manifest["installation"]["environment"] == "production",
+             "Commercial recovery evidence is production only")
+    try:
+        recovery.validate_evidence(receipt, manifest["recovery"],
+                                   manifest["installation"]["installation_key"], now=now)
+    except recovery.RecoveryError as exc:
+        raise ExecutorError(str(exc)) from exc
+    output = copy.deepcopy(state)
+    if output["recovery"]["evidence"] == receipt:
+        return output
+    _require(output["recovery"]["evidence"] is None, "Recovery evidence is already recorded")
+    _require(state["phases"]["VALIDACAO"] == "in_progress", "VALIDACAO must be in progress")
+    output["recovery"]["execution"] = {"backup": True, "isolated_restore": True}
+    output["recovery"]["evidence"] = copy.deepcopy(receipt)
+    _event(output, "attest", "VALIDACAO", "recovery", receipt["evidence_sha256"])
+    return output
+
+
 def delivery_blockers(state, manifest):
     """Derive outstanding mandatory gates; caller validates state for untrusted input."""
     evidence = state["evidence"]
@@ -395,6 +464,8 @@ def delivery_blockers(state, manifest):
                  if evidence["checks"][name] is not True]
     if manifest["installation"]["environment"] == "production" and not evidence["commercial_email"]:
         blockers.append("commercial_email")
+    if manifest["installation"]["environment"] == "production" and state["recovery"]["evidence"] is None:
+        blockers.append("recovery_evidence")
     return blockers
 
 
@@ -403,6 +474,12 @@ def complete_delivery(state, manifest):
     output = copy.deepcopy(state)
     if output["phases"]["ENTREGA"] == "completed":
         return output
+    if manifest["installation"]["environment"] == "production" and state["recovery"]["evidence"] is not None:
+        try:
+            recovery.validate_evidence(state["recovery"]["evidence"], manifest["recovery"],
+                                       manifest["installation"]["installation_key"])
+        except recovery.RecoveryError as exc:
+            raise ExecutorError(str(exc)) from exc
     _require(not delivery_blockers(output, manifest), "Delivery gates blocked: " +
              ", ".join(delivery_blockers(output, manifest)))
     output["phases"]["ENTREGA"] = "completed"

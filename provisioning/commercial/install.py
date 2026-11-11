@@ -121,11 +121,12 @@ def prepare(config_path, runtime_path, state_path):
     errors += provision.validate_deployment_catalog(variables, contract, catalog, checks)
     policy = provision.load_json(provision.COMMERCIAL_RUNTIME)
     errors += provision.validate_commercial_policy(policy)
+    recovery_policy = provision.load_json(provision.COMMERCIAL_RECOVERY)
     if config.get("environment") != "production":
         errors.append("Commercial installer requires production")
     if errors:
         raise InstallError("Invalid installation: " + "; ".join(errors))
-    manifest = provision.build_manifest(config, catalog, checks, variables, policy)
+    manifest = provision.build_manifest(config, catalog, checks, variables, policy, recovery_policy)
     executor.validate_manifest(manifest)
     runtime = read_runtime(runtime_path)
     if state_path.exists():
@@ -303,7 +304,7 @@ def check(manifest, env, check_item, token):
     return False
 
 
-def _install_prepared(manifest, state, env, runtime, state_path):
+def _install_prepared(manifest, state, env, runtime, state_path, recovery_evidence_path=None):
     compose(env, "config", "--quiet")
 
     def preparation(current):
@@ -377,6 +378,17 @@ def _install_prepared(manifest, state, env, runtime, state_path):
                 failed.append(item["id"])
         if failed:
             raise InstallError("Mandatory checks failed: " + ", ".join(failed))
+        if recovery_evidence_path is None:
+            raise InstallError("Recovery blocked: external backup and isolated restore evidence was not supplied")
+        try:
+            evidence_path = recovery_evidence_path.resolve(strict=True)
+            if ROOT == evidence_path or ROOT in evidence_path.parents:
+                raise InstallError("Recovery evidence must be outside the repository")
+            receipt = provision.load_json(evidence_path)
+        except (OSError, provision.ConfigurationError) as exc:
+            raise InstallError("Recovery evidence cannot be read") from exc
+        current = executor.attest_recovery(current, manifest, receipt)
+        save_state(state_path, current)
         return current
 
     state = phase(state, manifest, state_path, "VALIDACAO", validation)
@@ -385,7 +397,7 @@ def _install_prepared(manifest, state, env, runtime, state_path):
     print("Commercial installation validated; executor delivery ready")
 
 
-def install(config_path, runtime_path, state_path):
+def install(config_path, runtime_path, state_path, recovery_evidence_path=None):
     if shutil.which("docker") is None:
         raise InstallError("Docker Compose is unavailable")
     manifest, state, env, runtime = prepare(config_path, runtime_path, state_path)
@@ -393,7 +405,7 @@ def install(config_path, runtime_path, state_path):
         directory = Path(temporary)
         write_service_env_files(directory, manifest, runtime)
         env["ARTGENIAL_SERVICE_ENV_DIR"] = directory.as_posix()
-        _install_prepared(manifest, state, env, runtime, state_path)
+        _install_prepared(manifest, state, env, runtime, state_path, recovery_evidence_path)
 
 
 def main():
@@ -401,9 +413,11 @@ def main():
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--runtime-env", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
+    parser.add_argument("--recovery-evidence", type=Path,
+                        help="Receipt from a real external backup and isolated restore run")
     args = parser.parse_args()
     try:
-        install(args.config, args.runtime_env, args.state)
+        install(args.config, args.runtime_env, args.state, args.recovery_evidence)
     except (InstallError, executor.ExecutorError, provision.ConfigurationError) as exc:
         print(f"Installation stopped: {exc}", file=sys.stderr)
         return 1

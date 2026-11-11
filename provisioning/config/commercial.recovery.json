@@ -1,0 +1,27 @@
+{
+  "policy_version": 1,
+  "inventory": [
+    {"id": "postgres_data", "owner": "postgres", "path": "/var/lib/postgresql/data", "classification": "system_of_record", "backup_required": true, "consistent_export": "pg_dump"},
+    {"id": "redis_data", "owner": "redis", "path": "/data", "classification": "queue_and_runtime_state", "backup_required": true, "consistent_export": "redis_rdb"},
+    {"id": "rabbitmq_data", "owner": "rabbitmq", "path": "/var/lib/rabbitmq", "classification": "queue_state", "backup_required": true, "consistent_export": "rabbitmq_definition_and_messages"},
+    {"id": "clickhouse_data", "owner": "clickhouse", "path": "/var/lib/clickhouse", "classification": "analytics_system_of_record", "backup_required": true, "consistent_export": "clickhouse_backup"},
+    {"id": "auth_storage", "owner": "evo-auth", "path": "/rails/storage", "classification": "customer_files", "backup_required": true, "consistent_export": "filesystem_snapshot"},
+    {"id": "crm_storage", "owner": "evo-crm", "path": "/app/storage", "classification": "customer_files", "backup_required": true, "consistent_export": "filesystem_snapshot"},
+    {"id": "crm_cache", "owner": "evo-crm", "path": "/app/tmp/cache", "classification": "rebuildable_cache", "backup_required": false, "consistent_export": "none"},
+    {"id": "processor_logs", "owner": "evo-processor", "path": "/app/logs", "classification": "operational_logs", "backup_required": false, "consistent_export": "none"},
+    {"id": "caddy_data", "owner": "ingress", "path": "/data", "classification": "reissuable_tls_state", "backup_required": false, "consistent_export": "none"},
+    {"id": "caddy_config", "owner": "ingress", "path": "/config", "classification": "rebuildable_runtime_config", "backup_required": false, "consistent_export": "none"}
+  ],
+  "backup_contract": {
+    "destination": "external_required",
+    "encryption": "required",
+    "credentials": "runtime_only",
+    "artifact_hash": "sha256",
+    "maximum_evidence_age_seconds": 86400
+  },
+  "restore_contract": {
+    "target": "isolated_non_production_required",
+    "source_hash_must_match_backup": true,
+    "all_required_inventory_must_be_verified": true
+  }
+}

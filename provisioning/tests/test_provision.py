@@ -120,7 +120,7 @@ class ProvisioningFoundationTest(unittest.TestCase):
         first = json.dumps(self.manifest(), sort_keys=True, ensure_ascii=False)
         self.assertEqual(first, json.dumps(self.manifest(), sort_keys=True, ensure_ascii=False))
         data = json.loads(first)
-        self.assertEqual(data["manifest_version"], 1)
+        self.assertEqual(data["manifest_version"], 2)
         self.assertEqual(len(data["infrastructure"]), 14)
         self.assertEqual(set(data["public_endpoints"]), set(self.contract["required_domains"]))
 
@@ -207,7 +207,7 @@ class ProvisioningFoundationTest(unittest.TestCase):
         self.assertEqual(steps["artgenial_base"]["template_version"], "1")
         self.assertEqual(steps["artgenial_base"]["installation_key"], self.config["installation_key"])
         self.assertFalse(data["delivery"]["ready"])
-        self.assertEqual(data["delivery"]["release_rule"], "all_required_checks_pass")
+        self.assertEqual(data["delivery"]["release_rule"], "all_required_gates_pass")
         self.assertEqual(set(data["delivery"]["required_check_ids"]),
                          {check["id"] for check in self.checks["checks"] if check["required"]})
 
