@@ -73,3 +73,38 @@ jobs:
 
       - name: Run migration collision guard
         run: ./scripts/check_migration_collision.sh
+
+  validate-evolution-api:
+    name: Validate hardened Evolution API
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: evolution-api
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.ARTGENIAL_SUBMODULES_TOKEN }}
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.1'
+          cache: npm
+          cache-dependency-path: evolution-api/package-lock.json
+
+      - name: Install packages
+        run: npm ci
+
+      - name: Check linting
+        run: npm run lint:check
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+        env:
+          DATABASE_PROVIDER: postgresql
+          DATABASE_CONNECTION_URI: postgresql://user:pass@localhost:5432/evolution?schema=public
+
+      - name: Check build
+        run: npm run build
