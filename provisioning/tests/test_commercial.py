@@ -41,6 +41,11 @@ class CommercialInstallerTest(unittest.TestCase):
         self.assertEqual(manifest["variables"]["environment_setting"][-1]["status"], "resolved_by_commercial_policy")
         self.assertEqual(env["VITE_WS_URL"], self.config["domains"]["crm_api"])
         self.assertEqual(env["POSTGRES_DATABASE"], "artgenial_cliente_alfa")
+        self.assertEqual(
+            env["ARTGENIAL_PROJECT"],
+            install.installation_project_name(self.config["slug"], self.config["installation_key"]),
+        )
+        self.assertRegex(env["ARTGENIAL_PROJECT"], r"^artgenial_cliente-alfa_[0-9a-f]{12}$")
         self.assertNotEqual(env["FLOW_DATABASE"], env["POSTGRES_DATABASE"])
         self.assertLessEqual(len(env["FLOW_DATABASE"]), 63)
         self.assertEqual(runtime, self.runtime)
@@ -54,9 +59,19 @@ class CommercialInstallerTest(unittest.TestCase):
             self.assertNotIn(value, json.dumps(env))
         self.assertEqual(executor.resume_state(json.loads(self.state_path.read_text(encoding="utf-8")), manifest), state)
 
+    def test_compose_namespace_is_unique_per_installation_not_only_slug(self):
+        first = install.installation_project_name("cliente-alfa", "installation-a")
+        second = install.installation_project_name("cliente-alfa", "installation-b")
+
+        self.assertNotEqual(first, second)
+        self.assertEqual(first, install.installation_project_name("cliente-alfa", "installation-a"))
+        self.assertLessEqual(len(first), 63)
+
     def test_runtime_rejects_insecure_mail_and_admin_password(self):
         for key, value in (("SMTP_ADDRESS", "localhost"), ("SMTP_ADDRESS", "mailhog"),
-                           ("POSTGRES_PASSWORD", "has@delimiter"), ("SMTP_PORT", "99999")):
+                           ("POSTGRES_PASSWORD", "has@delimiter"), ("SMTP_PORT", "99999"),
+                           ("EVOLUTION_ADMIN_SECRET", "short"),
+                           ("EVOLUTION_WEBHOOK_SECRET", "short")):
             with self.subTest(key=key, value=value):
                 original = self.runtime[key]
                 self.runtime[key] = value
@@ -86,9 +101,23 @@ class CommercialInstallerTest(unittest.TestCase):
         self.assertIn("VITE_WS_URL: ${VITE_WS_URL:?}", source)
         self.assertNotIn("wss://${VITE_WS_URL", source)
         self.assertIn("networks: [private]", source)
+        self.assertIn("com.artgenial.installation_key: ${INSTALLATION_KEY:?}", source)
         common = source.split("x-common: &common\n", 1)[1].split("x-rails: &rails", 1)[0]
+        for hardening in (
+            "init: true",
+            "security_opt: [no-new-privileges:true]",
+            "pids_limit: 1024",
+            "mem_limit: 4g",
+            "cpus: 2.0",
+            "stop_grace_period: 30s",
+            "driver: json-file",
+            'options: {max-size: 10m, max-file: "5"}',
+        ):
+            self.assertIn(hardening, common)
         self.assertNotIn("env_file", common)
         self.assertNotIn("ARTGENIAL_RUNTIME_ENV_FILE", source)
+        for forbidden in ("privileged: true", "network_mode: host", "/var/run/docker.sock"):
+            self.assertNotIn(forbidden, source)
         self.assertEqual(source.count('ports: ["80:80", "443:443"]'), 1)
         for service in ("postgres", "redis", "rabbitmq", "clickhouse"):
             block = re.split(r"\n  [a-z][a-z0-9-]*:\n", source.split(f"  {service}:\n", 1)[1], maxsplit=1)[0]
@@ -172,6 +201,8 @@ class CommercialInstallerTest(unittest.TestCase):
             "BOT_RUNTIME_SECRET": {"evo-crm", "evo-crm-sidekiq", "evo-bot-runtime"},
             "EVOAI_CRM_API_TOKEN": {"evo-auth", "evo-crm", "evo-crm-sidekiq", "evo-flow"},
             "AUTH_APIKEY_INTEGRATION_LOCAL": {"evo-crm", "evo-crm-sidekiq", "evo-flow"},
+            "EVOLUTION_ADMIN_SECRET": {"evo-crm", "evo-crm-sidekiq"},
+            "EVOLUTION_WEBHOOK_SECRET": {"evo-crm"},
             "SMTP_PASSWORD": install.SMTP_SERVICES,
             "RABBITMQ_DEFAULT_PASS": {"rabbitmq", "evo-flow"},
             "CLICKHOUSE_PASSWORD": {"clickhouse", "evo-flow"},
@@ -183,6 +214,13 @@ class CommercialInstallerTest(unittest.TestCase):
         self.assertNotIn("POSTGRES_PASSWORD", grants["evo-core"])
         self.assertEqual(grants["evo-flow"]["EVO_AUTH_API_TOKEN"], runtime["EVOAI_CRM_API_TOKEN"])
         self.assertEqual(grants["evo-crm"]["EVO_AI_ENCRYPTION_KEY"], runtime["ENCRYPTION_KEY"])
+        self.assertEqual(grants["evolution-api"]["AUTHENTICATION_API_KEY"],
+                         runtime["EVOLUTION_ADMIN_SECRET"])
+        self.assertNotIn("EVOLUTION_ADMIN_SECRET", grants["evolution-api"])
+        self.assertNotIn("POSTGRES_PASSWORD", grants["evolution-api"])
+        self.assertNotIn("REDIS_PASSWORD", grants["evolution-api"])
+        self.assertIn("?schema=evolution_api", grants["evolution-api"]["DATABASE_CONNECTION_URI"])
+        self.assertTrue(grants["evolution-api"]["CACHE_REDIS_URI"].endswith("@redis:6379/5"))
         self.assertTrue(all("SMTP_PASSWORD" not in values for name, values in grants.items()
                             if name not in install.SMTP_SERVICES))
         self.assertFalse(set(runtime) & set(env))

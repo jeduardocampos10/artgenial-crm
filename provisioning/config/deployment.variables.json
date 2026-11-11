@@ -1,8 +1,8 @@
 {
   "catalog_version": 1,
   "variables": [
-    {"name":"POSTGRES_PASSWORD","classification":"secret_reference","services":["postgres","evo-auth","evo-auth-sidekiq","evo-crm","evo-crm-sidekiq","evo-core","evo-processor","evo-flow"],"required":true,"source":{"kind":"installation_secret","key":"POSTGRES_PASSWORD"}},
-    {"name":"REDIS_PASSWORD","classification":"secret_reference","services":["redis","evo-auth","evo-auth-sidekiq","evo-crm","evo-crm-sidekiq","evo-processor","evo-bot-runtime","evo-flow"],"required":true,"source":{"kind":"installation_secret","key":"REDIS_PASSWORD"}},
+    {"name":"POSTGRES_PASSWORD","classification":"secret_reference","services":["postgres","evo-auth","evo-auth-sidekiq","evo-crm","evo-crm-sidekiq","evo-core","evo-processor","evo-flow","evolution-api"],"required":true,"source":{"kind":"installation_secret","key":"POSTGRES_PASSWORD"}},
+    {"name":"REDIS_PASSWORD","classification":"secret_reference","services":["redis","evo-auth","evo-auth-sidekiq","evo-crm","evo-crm-sidekiq","evo-processor","evo-bot-runtime","evo-flow","evolution-api"],"required":true,"source":{"kind":"installation_secret","key":"REDIS_PASSWORD"}},
     {"name":"JWT_SECRET_KEY","classification":"secret_reference","services":["evo-auth","evo-auth-sidekiq","evo-crm","evo-crm-sidekiq","evo-core","evo-processor"],"required":true,"source":{"kind":"installation_secret","key":"JWT_SECRET_KEY"}},
     {"name":"SECRET_KEY_BASE","classification":"secret_reference","services":["evo-auth","evo-auth-sidekiq","evo-crm","evo-crm-sidekiq"],"required":true,"source":{"kind":"installation_secret","key":"SECRET_KEY_BASE"}},
     {"name":"ENCRYPTION_KEY","classification":"secret_reference","services":["evo-crm","evo-crm-sidekiq","evo-core","evo-processor"],"required":true,"source":{"kind":"installation_secret","key":"ENCRYPTION_KEY"}},
@@ -10,6 +10,8 @@
     {"name":"BOT_RUNTIME_SECRET","classification":"secret_reference","services":["evo-crm","evo-crm-sidekiq","evo-bot-runtime"],"required":true,"source":{"kind":"installation_secret","key":"BOT_RUNTIME_SECRET"}},
     {"name":"EVOAI_CRM_API_TOKEN","classification":"secret_reference","services":["evo-auth","evo-crm","evo-crm-sidekiq","evo-flow"],"required":true,"source":{"kind":"installation_secret","key":"EVOAI_CRM_API_TOKEN"}},
     {"name":"AUTH_APIKEY_INTEGRATION_LOCAL","classification":"secret_reference","services":["evo-crm","evo-crm-sidekiq","evo-flow"],"required":false,"required_in_production":true,"source":{"kind":"runtime_secret","key":"AUTH_APIKEY_INTEGRATION_LOCAL"}},
+    {"name":"EVOLUTION_ADMIN_SECRET","classification":"secret_reference","services":["evo-crm","evo-crm-sidekiq","evolution-api"],"required":true,"source":{"kind":"installation_secret","key":"EVOLUTION_ADMIN_SECRET"}},
+    {"name":"EVOLUTION_WEBHOOK_SECRET","classification":"secret_reference","services":["evo-crm"],"required":true,"source":{"kind":"installation_secret","key":"EVOLUTION_WEBHOOK_SECRET"}},
 
     {"name":"FRONTEND_URL","classification":"domain_binding","services":["evo-auth","evo-auth-sidekiq","evo-crm","evo-crm-sidekiq"],"required":true,"source":{"kind":"domain","key":"frontend"}},
     {"name":"BACKEND_URL","classification":"domain_binding","services":["evo-auth","evo-auth-sidekiq","evo-crm","evo-crm-sidekiq"],"required":true,"source":{"kind":"domain","key":"crm_api"}},
@@ -35,6 +37,7 @@
     {"name":"EVO_AI_CRM_URL","classification":"internal_service_binding","services":["evo-processor"],"required":true,"source":{"kind":"service","service":"evo-crm","format":"url","scheme":"http"}},
     {"name":"CORE_SERVICE_URL","classification":"internal_service_binding","services":["evo-processor"],"required":true,"source":{"kind":"service","service":"evo-core","format":"url","scheme":"http","path":"/api/v1"}},
     {"name":"EVOAI_CRM_BASE_URL","classification":"internal_service_binding","services":["evo-flow"],"required":true,"source":{"kind":"service","service":"evo-crm","format":"url","scheme":"http"}},
+    {"name":"EVOLUTION_API_URL","classification":"internal_service_binding","services":["evo-crm","evo-crm-sidekiq"],"required":true,"source":{"kind":"service","service":"evolution-api","format":"url","scheme":"http"}},
     {"name":"POSTGRES_HOST","classification":"internal_service_binding","services":["evo-auth","evo-auth-sidekiq","evo-crm","evo-crm-sidekiq"],"required":true,"source":{"kind":"service","service":"postgres","format":"host"}},
     {"name":"POSTGRES_PORT","classification":"internal_service_binding","services":["evo-auth","evo-auth-sidekiq","evo-crm","evo-crm-sidekiq"],"required":true,"source":{"kind":"service","service":"postgres","format":"port"}},
     {"name":"DB_HOST","classification":"internal_service_binding","services":["evo-core"],"required":true,"source":{"kind":"service","service":"postgres","format":"host"}},

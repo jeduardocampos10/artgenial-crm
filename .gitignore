@@ -17,3 +17,7 @@ evolution-hub
 evo-ai-docs/
 evo-crm-enterprise/
 evo-assistant/
+
+# Python tooling used by provisioning tests
+__pycache__/
+*.py[cod]

@@ -2,6 +2,17 @@ name: ${ARTGENIAL_PROJECT:?}
 x-common: &common
   networks: [private]
   restart: unless-stopped
+  init: true
+  security_opt: [no-new-privileges:true]
+  pids_limit: 1024
+  mem_limit: 4g
+  cpus: 2.0
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "5"}
+  labels:
+    com.artgenial.installation_key: ${INSTALLATION_KEY:?}
 x-rails: &rails
   RAILS_ENV: production
   RUN_MIGRATIONS: "true"
@@ -89,6 +100,7 @@ services:
       EVO_AI_CORE_SERVICE_URL: http://evo-core:5555
       BOT_RUNTIME_URL: http://evo-bot-runtime:8080
       BOT_RUNTIME_POSTBACK_BASE_URL: http://evo-crm:3000
+      EVOLUTION_API_URL: http://evolution-api:8080
       EVO_FLOW_ENABLED: "true"
       EVO_FLOW_API_URL: http://evo-flow:3334/api/v1
       EVO_FLOW_ALLOW_INSECURE: "false"
@@ -96,7 +108,7 @@ services:
     entrypoint: [/app/docker/entrypoints/rails.sh]
     command: [bundle, exec, rails, s, -p, "3000", -b, 0.0.0.0]
     volumes: [crm_storage:/app/storage, crm_cache:/app/tmp/cache, ./bootstrap_base.rb:/opt/artgenial/bootstrap_base.rb:ro]
-    depends_on: {evo-auth: {condition: service_healthy}}
+    depends_on: {evo-auth: {condition: service_healthy}, evolution-api: {condition: service_healthy}}
     healthcheck:
       test: [CMD, wget, -q, --spider, http://127.0.0.1:3000/health/live]
       interval: 30s
@@ -105,7 +117,7 @@ services:
     <<: *common
     env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/evo-crm-sidekiq.env]
     build: {context: ../../evo-ai-crm-community, dockerfile: docker/Dockerfile, args: {RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}}
-    environment: {<<: *rails, RUN_MIGRATIONS: "false", EVO_AUTH_SERVICE_URL: "http://evo-auth:3001", EVO_FLOW_API_URL: "http://evo-flow:3334/api/v1", EVO_FLOW_ENABLED: "true", EVO_FLOW_ALLOW_INSECURE: "false", BOT_RUNTIME_URL: "http://evo-bot-runtime:8080", BOT_RUNTIME_POSTBACK_BASE_URL: "http://evo-crm:3000"}
+    environment: {<<: *rails, RUN_MIGRATIONS: "false", EVO_AUTH_SERVICE_URL: "http://evo-auth:3001", EVO_FLOW_API_URL: "http://evo-flow:3334/api/v1", EVO_FLOW_ENABLED: "true", EVO_FLOW_ALLOW_INSECURE: "false", BOT_RUNTIME_URL: "http://evo-bot-runtime:8080", BOT_RUNTIME_POSTBACK_BASE_URL: "http://evo-crm:3000", EVOLUTION_API_URL: "http://evolution-api:8080"}
     entrypoint: [/app/docker/entrypoints/rails.sh]
     command: [bundle, exec, sidekiq, -C, config/sidekiq.yml]
     volumes: [crm_storage:/app/storage, crm_cache:/app/tmp/cache]
@@ -167,6 +179,29 @@ services:
     entrypoint: [sh, /opt/artgenial/bot-entrypoint.sh]
     volumes: [./bot-entrypoint.sh:/opt/artgenial/bot-entrypoint.sh:ro]
     depends_on: {evo-processor: {condition: service_healthy}}
+  evolution-api:
+    <<: *common
+    env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/evolution-api.env]
+    build: {context: ../../evolution-api}
+    environment:
+      SERVER_PORT: "8080"
+      SERVER_URL: http://evolution-api:8080
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_CLIENT_NAME: ${INSTALLATION_KEY:?}
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_TTL: "604800"
+      CACHE_REDIS_PREFIX_KEY: ${INSTALLATION_KEY:?}
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "false"
+      TELEMETRY: "false"
+      LANGUAGE: pt-BR
+    volumes: [evolution_instances:/evolution/instances]
+    depends_on: {postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+    healthcheck:
+      test: [CMD, node, -e, "require('http').get('http://127.0.0.1:8080/',r=>{if(r.statusCode!==200)throw Error(r.statusCode)})"]
+      interval: 30s
+      retries: 10
   evo-flow:
     <<: *common
     env_file: [${ARTGENIAL_SERVICE_ENV_DIR:?}/evo-flow.env]
@@ -237,5 +272,6 @@ volumes:
   crm_storage: {}
   crm_cache: {}
   processor_logs: {}
+  evolution_instances: {}
   caddy_data: {}
   caddy_config: {}

@@ -112,7 +112,7 @@ class ProvisioningFoundationTest(unittest.TestCase):
         self.assertIn("wss://api.cliente.example.test/cable (websocket_upgrade)", upgrade)
 
     def test_catalog_contains_all_compose_services(self):
-        self.assertEqual(len(self.catalog["services"]), 14)
+        self.assertEqual(len(self.catalog["services"]), 15)
         self.assertEqual(set(self.config["required_services"]),
                          {service["name"] for service in self.catalog["services"]})
 
@@ -120,13 +120,13 @@ class ProvisioningFoundationTest(unittest.TestCase):
         first = json.dumps(self.manifest(), sort_keys=True, ensure_ascii=False)
         self.assertEqual(first, json.dumps(self.manifest(), sort_keys=True, ensure_ascii=False))
         data = json.loads(first)
-        self.assertEqual(data["manifest_version"], 1)
-        self.assertEqual(len(data["infrastructure"]), 14)
+        self.assertEqual(data["manifest_version"], 2)
+        self.assertEqual(len(data["infrastructure"]), 15)
         self.assertEqual(set(data["public_endpoints"]), set(self.contract["required_domains"]))
 
     def test_infrastructure_keeps_private_services_and_host_ports_private(self):
         services = {item["name"]: item for item in self.manifest()["infrastructure"]}
-        for name in ("postgres", "redis", "rabbitmq", "clickhouse", "evo-bot-runtime"):
+        for name in ("postgres", "redis", "rabbitmq", "clickhouse", "evo-bot-runtime", "evolution-api"):
             with self.subTest(service=name):
                 self.assertFalse(services[name]["public_endpoint_required"])
                 self.assertNotIn("domain", services[name])
@@ -207,7 +207,7 @@ class ProvisioningFoundationTest(unittest.TestCase):
         self.assertEqual(steps["artgenial_base"]["template_version"], "1")
         self.assertEqual(steps["artgenial_base"]["installation_key"], self.config["installation_key"])
         self.assertFalse(data["delivery"]["ready"])
-        self.assertEqual(data["delivery"]["release_rule"], "all_required_checks_pass")
+        self.assertEqual(data["delivery"]["release_rule"], "all_required_gates_pass")
         self.assertEqual(set(data["delivery"]["required_check_ids"]),
                          {check["id"] for check in self.checks["checks"] if check["required"]})
 

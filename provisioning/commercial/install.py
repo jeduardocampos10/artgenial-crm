@@ -3,6 +3,7 @@
 
 import argparse
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -84,6 +85,9 @@ def read_runtime(path):
             raise InstallError(f"{key} must use URL-safe characters")
     if any(not values[key] for key in SECRET_KEYS):
         raise InstallError("Runtime secrets cannot be empty")
+    for key in ("EVOLUTION_ADMIN_SECRET", "EVOLUTION_WEBHOOK_SECRET"):
+        if len(values[key].encode("utf-8")) < 32:
+            raise InstallError(f"{key} must contain at least 32 bytes")
     return values
 
 
@@ -105,6 +109,13 @@ def verify_smtp(runtime):
         raise InstallError("Commercial SMTP verification failed") from None
 
 
+def installation_project_name(slug, installation_key):
+    """A stable Compose namespace unique to one installation, not merely a client slug."""
+    safe_slug = re.sub(r"[^a-z0-9_-]+", "_", slug.lower()).strip("_-")[:36]
+    identity = hashlib.sha256(installation_key.encode("utf-8")).hexdigest()[:12]
+    return f"artgenial_{safe_slug}_{identity}"
+
+
 def prepare(config_path, runtime_path, state_path):
     config = provision.load_json(config_path)
     contract, catalog, checks = map(provision.load_json, (provision.CONTRACT, provision.CATALOG, provision.CHECKS))
@@ -113,11 +124,12 @@ def prepare(config_path, runtime_path, state_path):
     errors += provision.validate_deployment_catalog(variables, contract, catalog, checks)
     policy = provision.load_json(provision.COMMERCIAL_RUNTIME)
     errors += provision.validate_commercial_policy(policy)
+    recovery_policy = provision.load_json(provision.COMMERCIAL_RECOVERY)
     if config.get("environment") != "production":
         errors.append("Commercial installer requires production")
     if errors:
         raise InstallError("Invalid installation: " + "; ".join(errors))
-    manifest = provision.build_manifest(config, catalog, checks, variables, policy)
+    manifest = provision.build_manifest(config, catalog, checks, variables, policy, recovery_policy)
     executor.validate_manifest(manifest)
     runtime = read_runtime(runtime_path)
     if state_path.exists():
@@ -127,7 +139,7 @@ def prepare(config_path, runtime_path, state_path):
     settings = {entry["name"]: entry["value"] for entry in manifest["variables"]["environment_setting"]}
     domains = {entry["name"]: entry["value"] for entry in manifest["variables"]["domain_binding"]}
     env = {**{key: value for key, value in os.environ.items() if key in HOST_ENV_KEYS}, **settings, **domains,
-           "ARTGENIAL_PROJECT": "artgenial_" + config["slug"].replace("-", "_"),
+           "ARTGENIAL_PROJECT": installation_project_name(config["slug"], config["installation_key"]),
            "FRONTEND_HOST": config["domains"]["frontend"].split("://", 1)[1],
            "CRM_API_HOST": config["domains"]["crm_api"].split("://", 1)[1],
            "AUTH_API_HOST": config["domains"]["auth_api"].split("://", 1)[1],
@@ -156,8 +168,23 @@ def service_runtime_values(manifest, runtime):
     for service in SMTP_SERVICES:
         grants[service].update(SMTP_KEYS & runtime.keys())
     result = {}
+    settings = {
+        entry["name"]: entry["value"]
+        for entry in manifest["variables"]["environment_setting"]
+    }
     for service, keys in grants.items():
         values = {key: runtime[key] for key in keys}
+        if service == "evolution-api":
+            database = settings["POSTGRES_DATABASE"]
+            username = settings["POSTGRES_USERNAME"]
+            values["DATABASE_CONNECTION_URI"] = (
+                f"postgresql://{username}:{values.pop('POSTGRES_PASSWORD')}"
+                f"@postgres:5432/{database}?schema=evolution_api"
+            )
+            values["CACHE_REDIS_URI"] = (
+                f"redis://:{values.pop('REDIS_PASSWORD')}@redis:6379/5"
+            )
+            values["AUTHENTICATION_API_KEY"] = values.pop("EVOLUTION_ADMIN_SECRET")
         if service == "evo-core":
             values["DB_PASSWORD"] = values.pop("POSTGRES_PASSWORD")
         if service in SMTP_SERVICES:
@@ -295,7 +322,7 @@ def check(manifest, env, check_item, token):
     return False
 
 
-def _install_prepared(manifest, state, env, runtime, state_path):
+def _install_prepared(manifest, state, env, runtime, state_path, recovery_evidence_path=None):
     compose(env, "config", "--quiet")
 
     def preparation(current):
@@ -369,6 +396,17 @@ def _install_prepared(manifest, state, env, runtime, state_path):
                 failed.append(item["id"])
         if failed:
             raise InstallError("Mandatory checks failed: " + ", ".join(failed))
+        if recovery_evidence_path is None:
+            raise InstallError("Recovery blocked: external backup and isolated restore evidence was not supplied")
+        try:
+            evidence_path = recovery_evidence_path.resolve(strict=True)
+            if ROOT == evidence_path or ROOT in evidence_path.parents:
+                raise InstallError("Recovery evidence must be outside the repository")
+            receipt = provision.load_json(evidence_path)
+        except (OSError, provision.ConfigurationError) as exc:
+            raise InstallError("Recovery evidence cannot be read") from exc
+        current = executor.attest_recovery(current, manifest, receipt)
+        save_state(state_path, current)
         return current
 
     state = phase(state, manifest, state_path, "VALIDACAO", validation)
@@ -377,7 +415,7 @@ def _install_prepared(manifest, state, env, runtime, state_path):
     print("Commercial installation validated; executor delivery ready")
 
 
-def install(config_path, runtime_path, state_path):
+def install(config_path, runtime_path, state_path, recovery_evidence_path=None):
     if shutil.which("docker") is None:
         raise InstallError("Docker Compose is unavailable")
     manifest, state, env, runtime = prepare(config_path, runtime_path, state_path)
@@ -385,7 +423,7 @@ def install(config_path, runtime_path, state_path):
         directory = Path(temporary)
         write_service_env_files(directory, manifest, runtime)
         env["ARTGENIAL_SERVICE_ENV_DIR"] = directory.as_posix()
-        _install_prepared(manifest, state, env, runtime, state_path)
+        _install_prepared(manifest, state, env, runtime, state_path, recovery_evidence_path)
 
 
 def main():
@@ -393,9 +431,11 @@ def main():
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--runtime-env", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
+    parser.add_argument("--recovery-evidence", type=Path,
+                        help="Receipt from a real external backup and isolated restore run")
     args = parser.parse_args()
     try:
-        install(args.config, args.runtime_env, args.state)
+        install(args.config, args.runtime_env, args.state, args.recovery_evidence)
     except (InstallError, executor.ExecutorError, provision.ConfigurationError) as exc:
         print(f"Installation stopped: {exc}", file=sys.stderr)
         return 1
