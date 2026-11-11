@@ -85,6 +85,9 @@ def read_runtime(path):
             raise InstallError(f"{key} must use URL-safe characters")
     if any(not values[key] for key in SECRET_KEYS):
         raise InstallError("Runtime secrets cannot be empty")
+    for key in ("EVOLUTION_ADMIN_SECRET", "EVOLUTION_WEBHOOK_SECRET"):
+        if len(values[key].encode("utf-8")) < 32:
+            raise InstallError(f"{key} must contain at least 32 bytes")
     return values
 
 
@@ -165,8 +168,23 @@ def service_runtime_values(manifest, runtime):
     for service in SMTP_SERVICES:
         grants[service].update(SMTP_KEYS & runtime.keys())
     result = {}
+    settings = {
+        entry["name"]: entry["value"]
+        for entry in manifest["variables"]["environment_setting"]
+    }
     for service, keys in grants.items():
         values = {key: runtime[key] for key in keys}
+        if service == "evolution-api":
+            database = settings["POSTGRES_DATABASE"]
+            username = settings["POSTGRES_USERNAME"]
+            values["DATABASE_CONNECTION_URI"] = (
+                f"postgresql://{username}:{values.pop('POSTGRES_PASSWORD')}"
+                f"@postgres:5432/{database}?schema=evolution_api"
+            )
+            values["CACHE_REDIS_URI"] = (
+                f"redis://:{values.pop('REDIS_PASSWORD')}@redis:6379/5"
+            )
+            values["AUTHENTICATION_API_KEY"] = values.pop("EVOLUTION_ADMIN_SECRET")
         if service == "evo-core":
             values["DB_PASSWORD"] = values.pop("POSTGRES_PASSWORD")
         if service in SMTP_SERVICES:

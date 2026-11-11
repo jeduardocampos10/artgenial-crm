@@ -19,7 +19,7 @@
   "required_services": [
     "postgres", "redis", "mailhog", "rabbitmq", "evo-auth", "evo-auth-sidekiq",
     "evo-crm", "evo-crm-sidekiq", "evo-core", "evo-processor",
-    "evo-bot-runtime", "clickhouse", "evo-flow", "evo-frontend"
+    "evo-bot-runtime", "evolution-api", "clickhouse", "evo-flow", "evo-frontend"
   ],
   "secret_references": {
     "POSTGRES_PASSWORD": "runtime:POSTGRES_PASSWORD",
@@ -29,6 +29,8 @@
     "ENCRYPTION_KEY": "runtime:ENCRYPTION_KEY",
     "DOORKEEPER_JWT_SECRET_KEY": "runtime:DOORKEEPER_JWT_SECRET_KEY",
     "BOT_RUNTIME_SECRET": "runtime:BOT_RUNTIME_SECRET",
-    "EVOAI_CRM_API_TOKEN": "runtime:EVOAI_CRM_API_TOKEN"
+    "EVOAI_CRM_API_TOKEN": "runtime:EVOAI_CRM_API_TOKEN",
+    "EVOLUTION_ADMIN_SECRET": "runtime:EVOLUTION_ADMIN_SECRET",
+    "EVOLUTION_WEBHOOK_SECRET": "runtime:EVOLUTION_WEBHOOK_SECRET"
   }
 }

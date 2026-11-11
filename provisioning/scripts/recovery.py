@@ -19,7 +19,7 @@ class RecoveryError(ValueError):
 EXPECTED_VOLUMES = frozenset((
     "postgres_data", "redis_data", "rabbitmq_data", "clickhouse_data",
     "auth_storage", "crm_storage", "crm_cache", "processor_logs",
-    "caddy_data", "caddy_config",
+    "evolution_instances", "caddy_data", "caddy_config",
 ))
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 

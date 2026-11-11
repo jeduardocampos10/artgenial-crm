@@ -69,7 +69,9 @@ class CommercialInstallerTest(unittest.TestCase):
 
     def test_runtime_rejects_insecure_mail_and_admin_password(self):
         for key, value in (("SMTP_ADDRESS", "localhost"), ("SMTP_ADDRESS", "mailhog"),
-                           ("POSTGRES_PASSWORD", "has@delimiter"), ("SMTP_PORT", "99999")):
+                           ("POSTGRES_PASSWORD", "has@delimiter"), ("SMTP_PORT", "99999"),
+                           ("EVOLUTION_ADMIN_SECRET", "short"),
+                           ("EVOLUTION_WEBHOOK_SECRET", "short")):
             with self.subTest(key=key, value=value):
                 original = self.runtime[key]
                 self.runtime[key] = value
@@ -199,6 +201,8 @@ class CommercialInstallerTest(unittest.TestCase):
             "BOT_RUNTIME_SECRET": {"evo-crm", "evo-crm-sidekiq", "evo-bot-runtime"},
             "EVOAI_CRM_API_TOKEN": {"evo-auth", "evo-crm", "evo-crm-sidekiq", "evo-flow"},
             "AUTH_APIKEY_INTEGRATION_LOCAL": {"evo-crm", "evo-crm-sidekiq", "evo-flow"},
+            "EVOLUTION_ADMIN_SECRET": {"evo-crm", "evo-crm-sidekiq"},
+            "EVOLUTION_WEBHOOK_SECRET": {"evo-crm"},
             "SMTP_PASSWORD": install.SMTP_SERVICES,
             "RABBITMQ_DEFAULT_PASS": {"rabbitmq", "evo-flow"},
             "CLICKHOUSE_PASSWORD": {"clickhouse", "evo-flow"},
@@ -210,6 +214,13 @@ class CommercialInstallerTest(unittest.TestCase):
         self.assertNotIn("POSTGRES_PASSWORD", grants["evo-core"])
         self.assertEqual(grants["evo-flow"]["EVO_AUTH_API_TOKEN"], runtime["EVOAI_CRM_API_TOKEN"])
         self.assertEqual(grants["evo-crm"]["EVO_AI_ENCRYPTION_KEY"], runtime["ENCRYPTION_KEY"])
+        self.assertEqual(grants["evolution-api"]["AUTHENTICATION_API_KEY"],
+                         runtime["EVOLUTION_ADMIN_SECRET"])
+        self.assertNotIn("EVOLUTION_ADMIN_SECRET", grants["evolution-api"])
+        self.assertNotIn("POSTGRES_PASSWORD", grants["evolution-api"])
+        self.assertNotIn("REDIS_PASSWORD", grants["evolution-api"])
+        self.assertIn("?schema=evolution_api", grants["evolution-api"]["DATABASE_CONNECTION_URI"])
+        self.assertTrue(grants["evolution-api"]["CACHE_REDIS_URI"].endswith("@redis:6379/5"))
         self.assertTrue(all("SMTP_PASSWORD" not in values for name, values in grants.items()
                             if name not in install.SMTP_SERVICES))
         self.assertFalse(set(runtime) & set(env))

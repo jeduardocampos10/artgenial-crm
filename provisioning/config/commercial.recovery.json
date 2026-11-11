@@ -9,6 +9,7 @@
     {"id": "crm_storage", "owner": "evo-crm", "path": "/app/storage", "classification": "customer_files", "backup_required": true, "consistent_export": "filesystem_snapshot"},
     {"id": "crm_cache", "owner": "evo-crm", "path": "/app/tmp/cache", "classification": "rebuildable_cache", "backup_required": false, "consistent_export": "none"},
     {"id": "processor_logs", "owner": "evo-processor", "path": "/app/logs", "classification": "operational_logs", "backup_required": false, "consistent_export": "none"},
+    {"id": "evolution_instances", "owner": "evolution-api", "path": "/evolution/instances", "classification": "customer_channel_sessions", "backup_required": true, "consistent_export": "encrypted_filesystem_snapshot"},
     {"id": "caddy_data", "owner": "ingress", "path": "/data", "classification": "reissuable_tls_state", "backup_required": false, "consistent_export": "none"},
     {"id": "caddy_config", "owner": "ingress", "path": "/config", "classification": "rebuildable_runtime_config", "backup_required": false, "consistent_export": "none"}
   ],

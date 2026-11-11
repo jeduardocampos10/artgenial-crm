@@ -40,10 +40,11 @@ class RecoveryGateTest(unittest.TestCase):
     def test_inventory_exactly_covers_every_persistent_compose_volume(self):
         entries = recovery.validate_policy(self.policy)
         self.assertEqual(set(entries), recovery.EXPECTED_VOLUMES)
-        self.assertEqual(len(entries), 10)
+        self.assertEqual(len(entries), 11)
         required = {name for name, item in entries.items() if item["backup_required"]}
         self.assertEqual(required, {"postgres_data", "redis_data", "rabbitmq_data",
-                                    "clickhouse_data", "auth_storage", "crm_storage"})
+                                    "clickhouse_data", "auth_storage", "crm_storage",
+                                    "evolution_instances"})
 
     def test_valid_external_backup_and_isolated_restore_receipt(self):
         summary = recovery.validate_evidence(self.receipt, self.policy, self.installation_key,
