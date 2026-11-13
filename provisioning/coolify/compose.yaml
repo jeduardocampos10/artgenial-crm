@@ -1,0 +1,491 @@
+# Dedicated Coolify topology for one isolated ArtGenial staging installation.
+# Coolify owns the Compose project namespace and proxy bindings. Never add host ports,
+# external networks, external volumes, Caddy, or production credentials to this file.
+x-common: &common
+  networks: [private]
+  restart: unless-stopped
+  init: true
+  security_opt: [no-new-privileges:true]
+  pids_limit: 1024
+  mem_limit: 4g
+  cpus: 2.0
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "5"}
+  labels:
+    com.artgenial.installation_key: ${INSTALLATION_KEY:?}
+    com.artgenial.environment: staging
+
+x-rails: &rails
+  RAILS_ENV: production
+  RUN_MIGRATIONS: "true"
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DATABASE: ${POSTGRES_DATABASE:?}
+  POSTGRES_USERNAME: ${POSTGRES_USERNAME:?}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+  FRONTEND_URL: ${FRONTEND_URL:?}
+  BACKEND_URL: ${BACKEND_URL:?}
+  SECRET_KEY_BASE: ${SECRET_KEY_BASE:?}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?}
+  EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN:?}
+
+x-mail: &mail
+  SMTP_ADDRESS: ${SMTP_ADDRESS:?}
+  SMTP_PORT: ${SMTP_PORT:?}
+  SMTP_USERNAME: ${SMTP_USERNAME:?}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:?}
+  MAILER_SENDER_EMAIL: ${MAILER_SENDER_EMAIL:?}
+  SMTP_SSL: ${SMTP_SSL:-false}
+  SMTP_ENABLE_STARTTLS_AUTO: ${SMTP_ENABLE_STARTTLS_AUTO:-true}
+
+services:
+  postgres:
+    <<: *common
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DATABASE:?}
+      POSTGRES_USER: ${POSTGRES_USERNAME:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    <<: *common
+    image: redis:7-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+    command: [sh, -c, 'exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes']
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  rabbitmq:
+    <<: *common
+    image: rabbitmq:3-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?}
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  clickhouse:
+    <<: *common
+    image: clickhouse/clickhouse-server:25.8-alpine
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USERNAME:?}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE:?}
+    volumes: [clickhouse_data:/var/lib/clickhouse]
+    healthcheck:
+      test: [CMD-SHELL, 'clickhouse-client --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --query "SELECT 1" >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  crm-schema-init:
+    <<: *common
+    restart: "no"
+    exclude_from_hc: true
+    build:
+      context: ../../evo-ai-crm-community
+      dockerfile: docker/Dockerfile
+      args: {BUNDLE_WITHOUT: "", RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}
+    environment:
+      <<: *rails
+      REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
+    entrypoint: [sh, /opt/artgenial/prepare-shared-schema.sh]
+    volumes:
+      - ../coolify/prepare-shared-schema.sh:/opt/artgenial/prepare-shared-schema.sh:ro
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  auth-migration-stamp:
+    <<: *common
+    restart: "no"
+    exclude_from_hc: true
+    build:
+      context: ../../evo-auth-service-community
+      args: {RAILS_ENV: production}
+    environment:
+      <<: *rails
+      REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/1
+      DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY:?}
+    entrypoint: [bundle]
+    command: [exec, rails, runner, /opt/artgenial/mark_auth_migrations.rb]
+    volumes:
+      - ../commercial/mark_auth_migrations.rb:/opt/artgenial/mark_auth_migrations.rb:ro
+    depends_on:
+      crm-schema-init: {condition: service_completed_successfully}
+
+  flow-db-init:
+    <<: *common
+    restart: "no"
+    exclude_from_hc: true
+    image: pgvector/pgvector:pg16
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USERNAME:?}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?}
+      FLOW_DATABASE: ${FLOW_DATABASE:?}
+    command:
+      - sh
+      - -ec
+      - |
+        if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$$FLOW_DATABASE'" | grep -qx 1; then
+          createdb "$$FLOW_DATABASE"
+        fi
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  evo-auth:
+    <<: *common
+    build:
+      context: ../../evo-auth-service-community
+      args: {RAILS_ENV: production}
+    expose: ["3001"]
+    environment:
+      <<: [*rails, *mail]
+      REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/1
+      DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY:?}
+      DOORKEEPER_JWT_ALGORITHM: hs256
+      DOORKEEPER_JWT_ISS: evo-auth-service
+      OAUTH_REDIRECT_URI: ${FRONTEND_URL:?}/oauth/callback
+      INSTALLATION_NAME: ${INSTALLATION_NAME:?}
+      FRONTEND_HOST: ${FRONTEND_HOST:?}
+      ADMIN_NAME: ${ADMIN_NAME:?}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?}
+      ADMIN_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:-}
+    entrypoint: [/usr/local/bin/evo-auth-entrypoint]
+    command: [bash, -c, 'rm -f /rails/tmp/pids/server.pid && bundle exec rails db:create && bundle exec rails db:migrate && bundle exec rails runner /opt/artgenial/bootstrap_auth.rb && exec bundle exec rails server -b 0.0.0.0 -p 3001']
+    volumes:
+      - auth_storage:/rails/storage
+      - ../commercial/bootstrap_auth.rb:/opt/artgenial/bootstrap_auth.rb:ro
+    depends_on:
+      auth-migration-stamp: {condition: service_completed_successfully}
+      flow-db-init: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:3001/health]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  evo-auth-sidekiq:
+    <<: *common
+    build:
+      context: ../../evo-auth-service-community
+      args: {RAILS_ENV: production}
+    environment:
+      <<: [*rails, *mail]
+      RUN_MIGRATIONS: "false"
+      SERVICE_ROLE: sidekiq
+      REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/1
+      DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY:?}
+      DOORKEEPER_JWT_ALGORITHM: hs256
+      DOORKEEPER_JWT_ISS: evo-auth-service
+    entrypoint: [/usr/local/bin/evo-auth-entrypoint]
+    command: [bundle, exec, sidekiq]
+    volumes: [auth_storage:/rails/storage]
+    depends_on:
+      evo-auth: {condition: service_healthy}
+
+  evo-crm:
+    <<: *common
+    build:
+      context: ../../evo-ai-crm-community
+      dockerfile: docker/Dockerfile
+      args: {BUNDLE_WITHOUT: "", RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}
+    expose: ["3000"]
+    environment:
+      <<: [*rails, *mail]
+      REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
+      AUTH_SERVICE_URL: ${AUTH_SERVICE_URL:?}
+      CORS_ORIGINS: ${CORS_ORIGINS:?}
+      AUTH_APIKEY_INTEGRATION_LOCAL: ${AUTH_APIKEY_INTEGRATION_LOCAL:?}
+      EVO_AUTH_SERVICE_URL: http://evo-auth:3001
+      EVO_AI_CORE_SERVICE_URL: http://evo-core:5555
+      EVO_AI_ENCRYPTION_KEY: ${ENCRYPTION_KEY:?}
+      BOT_RUNTIME_URL: http://evo-bot-runtime:8080
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET:?}
+      BOT_RUNTIME_POSTBACK_BASE_URL: http://evo-crm:3000
+      EVOLUTION_API_URL: http://evolution-api:8080
+      EVOLUTION_API_KEY: ${EVOLUTION_ADMIN_SECRET:?}
+      EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET:?}
+      EVO_FLOW_ENABLED: "true"
+      EVO_FLOW_API_URL: http://evo-flow:3334/api/v1
+      EVO_FLOW_ALLOW_INSECURE: "false"
+      ACTIVE_STORAGE_SERVICE: local
+      INSTALLATION_KEY: ${INSTALLATION_KEY:?}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?}
+    entrypoint: /app/docker/entrypoints/rails.sh
+    command: [bash, -c, 'bundle exec rails runner /opt/artgenial/bootstrap_base.rb && exec bundle exec rails s -p 3000 -b 0.0.0.0']
+    volumes:
+      - crm_storage:/app/storage
+      - crm_cache:/app/tmp/cache
+      - ../commercial/bootstrap_base.rb:/opt/artgenial/bootstrap_base.rb:ro
+    depends_on:
+      evo-auth: {condition: service_healthy}
+      evolution-api: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:3000/health/live]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+
+  evo-crm-sidekiq:
+    <<: *common
+    build:
+      context: ../../evo-ai-crm-community
+      dockerfile: docker/Dockerfile
+      args: {BUNDLE_WITHOUT: "", RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}
+    environment:
+      <<: [*rails, *mail]
+      RUN_MIGRATIONS: "false"
+      REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
+      AUTH_SERVICE_URL: ${AUTH_SERVICE_URL:?}
+      AUTH_APIKEY_INTEGRATION_LOCAL: ${AUTH_APIKEY_INTEGRATION_LOCAL:?}
+      EVO_AUTH_SERVICE_URL: http://evo-auth:3001
+      EVO_AI_CORE_SERVICE_URL: http://evo-core:5555
+      EVO_AI_ENCRYPTION_KEY: ${ENCRYPTION_KEY:?}
+      BOT_RUNTIME_URL: http://evo-bot-runtime:8080
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET:?}
+      BOT_RUNTIME_POSTBACK_BASE_URL: http://evo-crm:3000
+      EVOLUTION_API_URL: http://evolution-api:8080
+      EVOLUTION_API_KEY: ${EVOLUTION_ADMIN_SECRET:?}
+      EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET:?}
+      EVO_FLOW_ENABLED: "true"
+      EVO_FLOW_API_URL: http://evo-flow:3334/api/v1
+      EVO_FLOW_ALLOW_INSECURE: "false"
+    entrypoint: /app/docker/entrypoints/rails.sh
+    command: [bundle, exec, sidekiq, -C, config/sidekiq.yml]
+    volumes: [crm_storage:/app/storage, crm_cache:/app/tmp/cache]
+    depends_on:
+      evo-crm: {condition: service_healthy}
+
+  evo-core:
+    <<: *common
+    build: {context: ../../evo-ai-core-service-community}
+    expose: ["5555"]
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USERNAME:?}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?}
+      DB_NAME: ${POSTGRES_DATABASE:?}
+      DB_SSLMODE: disable
+      PORT: "5555"
+      EVOLUTION_BASE_URL: http://evo-crm:3000
+      EVO_AUTH_BASE_URL: http://evo-auth:3001
+      AI_PROCESSOR_URL: http://evo-processor:8000
+      AI_PROCESSOR_VERSION: v1
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?}
+    depends_on:
+      auth-migration-stamp: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:5555/health]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  evo-processor:
+    <<: *common
+    build: {context: ../../evo-ai-processor-community}
+    expose: ["8000"]
+    entrypoint: [sh, /opt/artgenial/processor-entrypoint.sh]
+    command: [sh, -c, 'alembic upgrade head && python -m scripts.run_seeders && exec uvicorn src.main:app --host "$$HOST" --port "$$PORT"']
+    environment:
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:?}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+      REDIS_SSL: "false"
+      HOST: 0.0.0.0
+      PORT: "8000"
+      DEBUG: "false"
+      EVO_AI_CRM_URL: http://evo-crm:3000
+      CORE_SERVICE_URL: http://evo-core:5555/api/v1
+      EVO_AUTH_BASE_URL: http://evo-auth:3001
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?}
+      API_URL: ${API_URL:?}
+      APP_URL: ${APP_URL:?}
+    volumes:
+      - processor_logs:/app/logs
+      - ../commercial/processor-entrypoint.sh:/opt/artgenial/processor-entrypoint.sh:ro
+    depends_on:
+      evo-auth: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:8000/health]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  evo-bot-runtime:
+    <<: *common
+    build: {context: ../../evo-bot-runtime}
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8080
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+      AI_PROCESSOR_URL: http://evo-processor:8000
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET:?}
+      MEDIA_HOST_ALLOWLIST: ${MEDIA_HOST_ALLOWLIST:?}
+      AI_CALL_TIMEOUT_SECONDS: "90"
+    entrypoint: [sh, /opt/artgenial/bot-entrypoint.sh]
+    volumes: [../commercial/bot-entrypoint.sh:/opt/artgenial/bot-entrypoint.sh:ro]
+    depends_on:
+      evo-processor: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:8080/health]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  evolution-api:
+    <<: *common
+    build: {context: ../../evolution-api}
+    environment:
+      SERVER_PORT: "8080"
+      SERVER_URL: http://evolution-api:8080
+      AUTHENTICATION_API_KEY: ${EVOLUTION_ADMIN_SECRET:?}
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USERNAME:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DATABASE:?}?schema=evolution_api
+      DATABASE_CONNECTION_CLIENT_NAME: ${INSTALLATION_KEY:?}
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://:${REDIS_PASSWORD:?}@redis:6379/5
+      CACHE_REDIS_TTL: "604800"
+      CACHE_REDIS_PREFIX_KEY: ${INSTALLATION_KEY:?}
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "false"
+      TELEMETRY_ENABLED: "false"
+      LANGUAGE: pt-BR
+    volumes: [evolution_instances:/evolution/instances]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "require('http').get('http://127.0.0.1:8080/',r=>{if(r.statusCode!==200)throw Error(r.statusCode)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  evo-flow:
+    <<: *common
+    build: {context: ../../evo-flow-community}
+    expose: ["3334"]
+    entrypoint: [sh, /opt/artgenial/flow-entrypoint.sh]
+    environment:
+      NODE_ENV: production
+      RUN_MODE: api
+      QUEUE_MODE: direct
+      STORAGE_MODE: clickhouse
+      WRITE_MODE: ch-sync
+      PORT: "3334"
+      BROKER_TYPE: rabbitmq
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?}
+      AUTH_APIKEY_INTEGRATION_LOCAL: ${AUTH_APIKEY_INTEGRATION_LOCAL:?}
+      EVO_AUTH_API_TOKEN: ${EVOAI_CRM_API_TOKEN:?}
+      EVO_AUTH_SERVICE_URL: http://evo-auth:3001
+      EVO_AUTH_VALIDATE_TOKEN_ENDPOINT: /api/v1/auth/validate
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:?}
+      CLICKHOUSE_USERNAME: ${CLICKHOUSE_USERNAME:?}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?}
+      CLICKHOUSE_TABLE: contact_events
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+      REDIS_DB: "4"
+      POSTGRES_DB_HOST: postgres
+      POSTGRES_DB_PORT: "5432"
+      POSTGRES_DB_USERNAME: ${POSTGRES_USERNAME:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB_DATABASE: ${FLOW_DATABASE:?}
+      EVOAI_CRM_BASE_URL: http://evo-crm:3000
+      EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN:?}
+    volumes: [../commercial/flow-entrypoint.sh:/opt/artgenial/flow-entrypoint.sh:ro]
+    depends_on:
+      clickhouse: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+      flow-db-init: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "require('http').get('http://127.0.0.1:3334/health',r=>{if(r.statusCode!==200)throw Error(r.statusCode)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  evo-frontend:
+    <<: *common
+    build:
+      context: ../../evo-ai-frontend-community
+      args:
+        VITE_API_URL: ${VITE_API_URL:?}
+        VITE_AUTH_API_URL: ${VITE_AUTH_API_URL:?}
+        VITE_WS_URL: ${VITE_WS_URL:?}
+        VITE_EVOAI_API_URL: ${VITE_EVOAI_API_URL:?}
+        VITE_AGENT_PROCESSOR_URL: ${VITE_AGENT_PROCESSOR_URL:?}
+        VITE_EVOFLOW_API_URL: ${VITE_EVOFLOW_API_URL:?}
+    expose: ["80"]
+    environment:
+      VITE_APP_ENV: staging
+      VITE_API_URL: ${VITE_API_URL:?}
+      VITE_AUTH_API_URL: ${VITE_AUTH_API_URL:?}
+      VITE_WS_URL: ${VITE_WS_URL:?}
+      VITE_EVOAI_API_URL: ${VITE_EVOAI_API_URL:?}
+      VITE_AGENT_PROCESSOR_URL: ${VITE_AGENT_PROCESSOR_URL:?}
+      VITE_EVOFLOW_API_URL: ${VITE_EVOFLOW_API_URL:?}
+    depends_on:
+      evo-auth: {condition: service_healthy}
+      evo-crm: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:80/health]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+networks:
+  private: {}
+
+volumes:
+  postgres_data: {}
+  redis_data: {}
+  rabbitmq_data: {}
+  clickhouse_data: {}
+  auth_storage: {}
+  crm_storage: {}
+  crm_cache: {}
+  processor_logs: {}
+  evolution_instances: {}
