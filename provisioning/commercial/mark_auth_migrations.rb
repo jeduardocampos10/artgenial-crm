@@ -1,11 +1,20 @@
 # frozen_string_literal: true
-# The CRM master schema includes Auth tables. This is run only after a schema
-# load into an empty database, before either web service starts.
-raise 'Auth migration stamp requires an empty user table' if User.exists?
+# The CRM master schema includes Auth tables. On first install this records the
+# Auth migrations already represented by that schema. On resume/redeploy with
+# Auth data, it leaves any new migration unstamped so the normal db:migrate step
+# can apply upgrades instead of skipping them.
+if User.exists?
+  puts 'Auth migration stamp skipped for existing installation'
+  exit
+end
 
-Dir[Rails.root.join('db', 'migrate', '*.rb')].sort.each do |file|
-  version = File.basename(file).split('_').first
-  ActiveRecord::Base.connection.schema_migration.create_version(version)
+versions = Dir[Rails.root.join('db', 'migrate', '*.rb')].sort.map do |file|
+  File.basename(file).split('_').first
+end
+schema_migration = ActiveRecord::Base.connection.schema_migration
+
+versions.each do |version|
+  schema_migration.create_version(version)
 rescue ActiveRecord::RecordNotUnique
   nil
 end
