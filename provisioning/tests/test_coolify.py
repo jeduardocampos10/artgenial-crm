@@ -131,17 +131,27 @@ class CoolifyComposeTests(unittest.TestCase):
 
     def test_all_relative_bind_mount_sources_exist(self):
         expected = {
-            "../coolify/prepare-shared-schema.sh",
-            "../commercial/mark_auth_migrations.rb",
-            "../commercial/bootstrap_auth.rb",
-            "../commercial/bootstrap_base.rb",
-            "../commercial/processor-entrypoint.sh",
-            "../commercial/bot-entrypoint.sh",
-            "../commercial/flow-entrypoint.sh",
+            "provisioning/coolify/prepare-shared-schema.sh",
+            "provisioning/commercial/mark_auth_migrations.rb",
+            "provisioning/commercial/bootstrap_auth.rb",
+            "provisioning/commercial/bootstrap_base.rb",
+            "provisioning/commercial/processor-entrypoint.sh",
+            "provisioning/commercial/bot-entrypoint.sh",
+            "provisioning/commercial/flow-entrypoint.sh",
         }
-        compose_dir = COMPOSE.parent
+        repository_root = PROVISIONING.parent
         for relative in expected:
-            self.assertTrue((compose_dir / relative).resolve().is_file(), relative)
+            self.assertTrue((repository_root / relative).is_file(), relative)
+
+    def test_coolify_project_directory_paths_never_escape_repository_root(self):
+        self.assertNotIn("../", self.text)
+        for context in (
+            "./evo-ai-crm-community", "./evo-auth-service-community",
+            "./evo-ai-core-service-community", "./evo-ai-processor-community",
+            "./evo-bot-runtime", "./evolution-api", "./evo-flow-community",
+            "./evo-ai-frontend-community",
+        ):
+            self.assertIn("context: " + context, self.text)
 
 
 if __name__ == "__main__":
