@@ -103,7 +103,7 @@ services:
     restart: "no"
     exclude_from_hc: true
     build:
-      context: ../../evo-ai-crm-community
+      context: ./evo-ai-crm-community
       dockerfile: docker/Dockerfile
       args: {BUNDLE_WITHOUT: "", RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}
     environment:
@@ -111,7 +111,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
     entrypoint: [sh, /opt/artgenial/prepare-shared-schema.sh]
     volumes:
-      - ../coolify/prepare-shared-schema.sh:/opt/artgenial/prepare-shared-schema.sh:ro
+      - ./provisioning/coolify/prepare-shared-schema.sh:/opt/artgenial/prepare-shared-schema.sh:ro
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -121,7 +121,7 @@ services:
     restart: "no"
     exclude_from_hc: true
     build:
-      context: ../../evo-auth-service-community
+      context: ./evo-auth-service-community
       args: {RAILS_ENV: production}
     environment:
       <<: *rails
@@ -130,7 +130,7 @@ services:
     entrypoint: [bundle]
     command: [exec, rails, runner, /opt/artgenial/mark_auth_migrations.rb]
     volumes:
-      - ../commercial/mark_auth_migrations.rb:/opt/artgenial/mark_auth_migrations.rb:ro
+      - ./provisioning/commercial/mark_auth_migrations.rb:/opt/artgenial/mark_auth_migrations.rb:ro
     depends_on:
       crm-schema-init: {condition: service_completed_successfully}
 
@@ -158,7 +158,7 @@ services:
   evo-auth:
     <<: *common
     build:
-      context: ../../evo-auth-service-community
+      context: ./evo-auth-service-community
       args: {RAILS_ENV: production}
     expose: ["3001"]
     environment:
@@ -177,7 +177,7 @@ services:
     command: [bash, -c, 'rm -f /rails/tmp/pids/server.pid && bundle exec rails db:create && bundle exec rails db:migrate && bundle exec rails runner /opt/artgenial/bootstrap_auth.rb && exec bundle exec rails server -b 0.0.0.0 -p 3001']
     volumes:
       - auth_storage:/rails/storage
-      - ../commercial/bootstrap_auth.rb:/opt/artgenial/bootstrap_auth.rb:ro
+      - ./provisioning/commercial/bootstrap_auth.rb:/opt/artgenial/bootstrap_auth.rb:ro
     depends_on:
       auth-migration-stamp: {condition: service_completed_successfully}
       flow-db-init: {condition: service_completed_successfully}
@@ -192,7 +192,7 @@ services:
   evo-auth-sidekiq:
     <<: *common
     build:
-      context: ../../evo-auth-service-community
+      context: ./evo-auth-service-community
       args: {RAILS_ENV: production}
     environment:
       <<: [*rails, *mail]
@@ -211,7 +211,7 @@ services:
   evo-crm:
     <<: *common
     build:
-      context: ../../evo-ai-crm-community
+      context: ./evo-ai-crm-community
       dockerfile: docker/Dockerfile
       args: {BUNDLE_WITHOUT: "", RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}
     expose: ["3000"]
@@ -241,7 +241,7 @@ services:
     volumes:
       - crm_storage:/app/storage
       - crm_cache:/app/tmp/cache
-      - ../commercial/bootstrap_base.rb:/opt/artgenial/bootstrap_base.rb:ro
+      - ./provisioning/commercial/bootstrap_base.rb:/opt/artgenial/bootstrap_base.rb:ro
     depends_on:
       evo-auth: {condition: service_healthy}
       evolution-api: {condition: service_healthy}
@@ -255,7 +255,7 @@ services:
   evo-crm-sidekiq:
     <<: *common
     build:
-      context: ../../evo-ai-crm-community
+      context: ./evo-ai-crm-community
       dockerfile: docker/Dockerfile
       args: {BUNDLE_WITHOUT: "", RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}
     environment:
@@ -284,7 +284,7 @@ services:
 
   evo-core:
     <<: *common
-    build: {context: ../../evo-ai-core-service-community}
+    build: {context: ./evo-ai-core-service-community}
     expose: ["5555"]
     environment:
       DB_HOST: postgres
@@ -311,7 +311,7 @@ services:
 
   evo-processor:
     <<: *common
-    build: {context: ../../evo-ai-processor-community}
+    build: {context: ./evo-ai-processor-community}
     expose: ["8000"]
     entrypoint: [sh, /opt/artgenial/processor-entrypoint.sh]
     command: [sh, -c, 'alembic upgrade head && python -m scripts.run_seeders && exec uvicorn src.main:app --host "$$HOST" --port "$$PORT"']
@@ -336,7 +336,7 @@ services:
       APP_URL: ${APP_URL:?}
     volumes:
       - processor_logs:/app/logs
-      - ../commercial/processor-entrypoint.sh:/opt/artgenial/processor-entrypoint.sh:ro
+      - ./provisioning/commercial/processor-entrypoint.sh:/opt/artgenial/processor-entrypoint.sh:ro
     depends_on:
       evo-auth: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -349,7 +349,7 @@ services:
 
   evo-bot-runtime:
     <<: *common
-    build: {context: ../../evo-bot-runtime}
+    build: {context: ./evo-bot-runtime}
     environment:
       LISTEN_ADDR: 0.0.0.0:8080
       REDIS_PASSWORD: ${REDIS_PASSWORD:?}
@@ -358,7 +358,7 @@ services:
       MEDIA_HOST_ALLOWLIST: ${MEDIA_HOST_ALLOWLIST:?}
       AI_CALL_TIMEOUT_SECONDS: "90"
     entrypoint: [sh, /opt/artgenial/bot-entrypoint.sh]
-    volumes: [../commercial/bot-entrypoint.sh:/opt/artgenial/bot-entrypoint.sh:ro]
+    volumes: [./provisioning/commercial/bot-entrypoint.sh:/opt/artgenial/bot-entrypoint.sh:ro]
     depends_on:
       evo-processor: {condition: service_healthy}
     healthcheck:
@@ -369,7 +369,7 @@ services:
 
   evolution-api:
     <<: *common
-    build: {context: ../../evolution-api}
+    build: {context: ./evolution-api}
     environment:
       SERVER_PORT: "8080"
       SERVER_URL: http://evolution-api:8080
@@ -399,7 +399,7 @@ services:
 
   evo-flow:
     <<: *common
-    build: {context: ../../evo-flow-community}
+    build: {context: ./evo-flow-community}
     expose: ["3334"]
     entrypoint: [sh, /opt/artgenial/flow-entrypoint.sh]
     environment:
@@ -433,7 +433,7 @@ services:
       POSTGRES_DB_DATABASE: ${FLOW_DATABASE:?}
       EVOAI_CRM_BASE_URL: http://evo-crm:3000
       EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN:?}
-    volumes: [../commercial/flow-entrypoint.sh:/opt/artgenial/flow-entrypoint.sh:ro]
+    volumes: [./provisioning/commercial/flow-entrypoint.sh:/opt/artgenial/flow-entrypoint.sh:ro]
     depends_on:
       clickhouse: {condition: service_healthy}
       rabbitmq: {condition: service_healthy}
@@ -450,7 +450,7 @@ services:
   evo-frontend:
     <<: *common
     build:
-      context: ../../evo-ai-frontend-community
+      context: ./evo-ai-frontend-community
       args:
         VITE_API_URL: ${VITE_API_URL:?}
         VITE_AUTH_API_URL: ${VITE_AUTH_API_URL:?}
