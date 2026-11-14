@@ -72,8 +72,8 @@ class CoolifyComposeTests(unittest.TestCase):
 
     def test_bootstrap_password_is_optional_only_after_first_bootstrap(self):
         self.assertEqual(self.text.count("${ADMIN_BOOTSTRAP_PASSWORD:-}"), 1)
-        self.assertIn("bootstrap_auth.rb:/opt/artgenial/bootstrap_auth.rb:ro", self.text)
-        self.assertIn("bootstrap_base.rb:/opt/artgenial/bootstrap_base.rb:ro", self.text)
+        self.assertIn("/opt/artgenial/bootstrap_auth.rb", self.text)
+        self.assertIn("/opt/artgenial/bootstrap_base.rb", self.text)
 
     def test_only_six_public_services_are_exposed_to_coolify_proxy(self):
         exposed = set()
@@ -123,8 +123,8 @@ class CoolifyComposeTests(unittest.TestCase):
         self.assertIn("crm-schema-init: {condition: service_completed_successfully}", self.text)
         self.assertIn("auth-migration-stamp: {condition: service_completed_successfully}", self.text)
         self.assertIn("flow-db-init: {condition: service_completed_successfully}", self.text)
-        self.assertIn("mark_auth_migrations.rb:/opt/artgenial/mark_auth_migrations.rb:ro", self.text)
-        self.assertIn("prepare-shared-schema.sh:/opt/artgenial/prepare-shared-schema.sh:ro", self.text)
+        self.assertIn("/opt/artgenial/mark_auth_migrations.rb", self.text)
+        self.assertIn("/opt/artgenial/prepare-shared-schema.sh", self.text)
         self.assertIn("SELECT 1 FROM pg_database", self.text)
         self.assertEqual(self.text.count('restart: "no"'), 3)
         self.assertEqual(self.text.count("exclude_from_hc: true"), 3)
@@ -163,6 +163,26 @@ class CoolifyComposeTests(unittest.TestCase):
     def test_final_coolify_topology_never_builds_on_the_server(self):
         self.assertNotRegex(self.text, r"(?m)^\s+build:\s*(?:$|\{)")
         self.assertNotIn("context:", self.text)
+
+    def test_compose_has_no_repository_file_bind_mounts(self):
+        volume_lines = re.findall(r"(?m)^\s+-?\s*[^#\n]*:/[^#\n]*$", self.text)
+        self.assertFalse(
+            [line for line in volume_lines if "./" in line or "/provisioning/" in line],
+            "repository files must be embedded in immutable images",
+        )
+        self.assertNotIn("./provisioning/", self.text)
+
+    def test_required_embedded_asset_paths_are_used(self):
+        for path in (
+            "/opt/artgenial/prepare-shared-schema.sh",
+            "/opt/artgenial/mark_auth_migrations.rb",
+            "/opt/artgenial/bootstrap_auth.rb",
+            "/opt/artgenial/bootstrap_base.rb",
+            "/opt/artgenial/processor-entrypoint.sh",
+            "/opt/artgenial/bot-entrypoint.sh",
+            "/opt/artgenial/flow-entrypoint.sh",
+        ):
+            self.assertIn(path, self.text)
 
     def test_web_workers_and_one_shots_reuse_the_same_images(self):
         self.assertEqual(self.text.count("image: ${CRM_IMAGE:?}"), 3)

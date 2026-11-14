@@ -112,8 +112,6 @@ services:
       <<: *rails
       REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
     entrypoint: [sh, /opt/artgenial/prepare-shared-schema.sh]
-    volumes:
-      - ./provisioning/coolify/prepare-shared-schema.sh:/opt/artgenial/prepare-shared-schema.sh:ro
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -130,8 +128,6 @@ services:
       DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY:?}
     entrypoint: [bundle]
     command: [exec, rails, runner, /opt/artgenial/mark_auth_migrations.rb]
-    volumes:
-      - ./provisioning/commercial/mark_auth_migrations.rb:/opt/artgenial/mark_auth_migrations.rb:ro
     depends_on:
       crm-schema-init: {condition: service_completed_successfully}
 
@@ -177,7 +173,6 @@ services:
     command: [bash, -c, 'rm -f /rails/tmp/pids/server.pid && bundle exec rails db:create && bundle exec rails db:migrate && bundle exec rails runner /opt/artgenial/bootstrap_auth.rb && exec bundle exec rails server -b 0.0.0.0 -p 3001']
     volumes:
       - auth_storage:/rails/storage
-      - ./provisioning/commercial/bootstrap_auth.rb:/opt/artgenial/bootstrap_auth.rb:ro
     depends_on:
       auth-migration-stamp: {condition: service_completed_successfully}
       flow-db-init: {condition: service_completed_successfully}
@@ -237,7 +232,6 @@ services:
     volumes:
       - crm_storage:/app/storage
       - crm_cache:/app/tmp/cache
-      - ./provisioning/commercial/bootstrap_base.rb:/opt/artgenial/bootstrap_base.rb:ro
     depends_on:
       evo-auth: {condition: service_healthy}
       evolution-api: {condition: service_healthy}
@@ -330,7 +324,6 @@ services:
       APP_URL: ${APP_URL:?}
     volumes:
       - processor_logs:/app/logs
-      - ./provisioning/commercial/processor-entrypoint.sh:/opt/artgenial/processor-entrypoint.sh:ro
     depends_on:
       evo-auth: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -353,7 +346,6 @@ services:
       MEDIA_HOST_ALLOWLIST: ${MEDIA_HOST_ALLOWLIST:?}
       AI_CALL_TIMEOUT_SECONDS: "90"
     entrypoint: [sh, /opt/artgenial/bot-entrypoint.sh]
-    volumes: [./provisioning/commercial/bot-entrypoint.sh:/opt/artgenial/bot-entrypoint.sh:ro]
     depends_on:
       evo-processor: {condition: service_healthy}
     healthcheck:
@@ -428,7 +420,7 @@ services:
       POSTGRES_DB_DATABASE: ${FLOW_DATABASE:?}
       EVOAI_CRM_BASE_URL: http://evo-crm:3000
       EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN:?}
-    volumes: [./provisioning/commercial/flow-entrypoint.sh:/opt/artgenial/flow-entrypoint.sh:ro]
+
     depends_on:
       clickhouse: {condition: service_healthy}
       rabbitmq: {condition: service_healthy}
