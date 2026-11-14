@@ -1,4 +1,6 @@
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -183,6 +185,33 @@ class CoolifyComposeTests(unittest.TestCase):
             "/opt/artgenial/flow-entrypoint.sh",
         ):
             self.assertIn(path, self.text)
+
+    def test_root_image_contexts_embed_required_assets(self):
+        preparer = PROVISIONING / "coolify" / "prepare-hml-image-context.sh"
+        expected = {
+            "auth": ("mark_auth_migrations.rb", "bootstrap_auth.rb"),
+            "bot-runtime": ("bot-entrypoint.sh",),
+            "flow": ("flow-entrypoint.sh",),
+            "evolution-api": (),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            for component, assets in expected.items():
+                context = Path(temporary) / component
+                context.mkdir()
+                (context / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+                subprocess.run(
+                    ["sh", str(preparer), component, str(context)],
+                    check=True,
+                    cwd=PROVISIONING.parent,
+                )
+                dockerfile = (context / "Dockerfile.hml").read_text(encoding="utf-8")
+                for asset in assets:
+                    embedded = context / ".artgenial" / asset
+                    source = PROVISIONING / "commercial" / asset
+                    self.assertEqual(embedded.read_bytes(), source.read_bytes())
+                    self.assertIn(asset, dockerfile)
+                if not assets:
+                    self.assertFalse((context / ".artgenial").exists())
 
     def test_web_workers_and_one_shots_reuse_the_same_images(self):
         self.assertEqual(self.text.count("image: ${CRM_IMAGE:?}"), 3)
