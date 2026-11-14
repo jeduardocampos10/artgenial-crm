@@ -1,6 +1,10 @@
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+
+from provisioning.coolify.validate_images import IMAGE_VARIABLES, validate
 
 
 PROVISIONING = Path(__file__).resolve().parents[1]
@@ -63,14 +67,15 @@ class CoolifyComposeTests(unittest.TestCase):
             "AUTH_SERVICE_URL", "CORS_ORIGINS", "API_URL", "APP_URL",
             "MEDIA_HOST_ALLOWLIST", "VITE_API_URL", "VITE_AUTH_API_URL", "VITE_WS_URL",
             "VITE_EVOAI_API_URL", "VITE_AGENT_PROCESSOR_URL", "VITE_EVOFLOW_API_URL",
+            *IMAGE_VARIABLES,
         }
         for key in required:
             self.assertIn("${" + key + ":?}", self.text, key)
 
     def test_bootstrap_password_is_optional_only_after_first_bootstrap(self):
         self.assertEqual(self.text.count("${ADMIN_BOOTSTRAP_PASSWORD:-}"), 1)
-        self.assertIn("bootstrap_auth.rb:/opt/artgenial/bootstrap_auth.rb:ro", self.text)
-        self.assertIn("bootstrap_base.rb:/opt/artgenial/bootstrap_base.rb:ro", self.text)
+        self.assertIn("/opt/artgenial/bootstrap_auth.rb", self.text)
+        self.assertIn("/opt/artgenial/bootstrap_base.rb", self.text)
 
     def test_only_six_public_services_are_exposed_to_coolify_proxy(self):
         exposed = set()
@@ -120,8 +125,8 @@ class CoolifyComposeTests(unittest.TestCase):
         self.assertIn("crm-schema-init: {condition: service_completed_successfully}", self.text)
         self.assertIn("auth-migration-stamp: {condition: service_completed_successfully}", self.text)
         self.assertIn("flow-db-init: {condition: service_completed_successfully}", self.text)
-        self.assertIn("mark_auth_migrations.rb:/opt/artgenial/mark_auth_migrations.rb:ro", self.text)
-        self.assertIn("prepare-shared-schema.sh:/opt/artgenial/prepare-shared-schema.sh:ro", self.text)
+        self.assertIn("/opt/artgenial/mark_auth_migrations.rb", self.text)
+        self.assertIn("/opt/artgenial/prepare-shared-schema.sh", self.text)
         self.assertIn("SELECT 1 FROM pg_database", self.text)
         self.assertEqual(self.text.count('restart: "no"'), 3)
         self.assertEqual(self.text.count("exclude_from_hc: true"), 3)
@@ -157,15 +162,89 @@ class CoolifyComposeTests(unittest.TestCase):
         for relative in expected:
             self.assertTrue((repository_root / relative).is_file(), relative)
 
-    def test_coolify_project_directory_paths_never_escape_repository_root(self):
-        self.assertNotIn("../", self.text)
-        for context in (
-            "./evo-ai-crm-community", "./evo-auth-service-community",
-            "./evo-ai-core-service-community", "./evo-ai-processor-community",
-            "./evo-bot-runtime", "./evolution-api", "./evo-flow-community",
-            "./evo-ai-frontend-community",
+    def test_final_coolify_topology_never_builds_on_the_server(self):
+        self.assertNotRegex(self.text, r"(?m)^\s+build:\s*(?:$|\{)")
+        self.assertNotIn("context:", self.text)
+
+    def test_compose_has_no_repository_file_bind_mounts(self):
+        volume_lines = re.findall(r"(?m)^\s+-?\s*[^#\n]*:/[^#\n]*$", self.text)
+        self.assertFalse(
+            [line for line in volume_lines if "./" in line or "/provisioning/" in line],
+            "repository files must be embedded in immutable images",
+        )
+        self.assertNotIn("./provisioning/", self.text)
+
+    def test_required_embedded_asset_paths_are_used(self):
+        for path in (
+            "/opt/artgenial/prepare-shared-schema.sh",
+            "/opt/artgenial/mark_auth_migrations.rb",
+            "/opt/artgenial/bootstrap_auth.rb",
+            "/opt/artgenial/bootstrap_base.rb",
+            "/opt/artgenial/processor-entrypoint.sh",
+            "/opt/artgenial/bot-entrypoint.sh",
+            "/opt/artgenial/flow-entrypoint.sh",
         ):
-            self.assertIn("context: " + context, self.text)
+            self.assertIn(path, self.text)
+
+    def test_root_image_contexts_embed_required_assets(self):
+        preparer = PROVISIONING / "coolify" / "prepare-hml-image-context.sh"
+        expected = {
+            "auth": ("mark_auth_migrations.rb", "bootstrap_auth.rb"),
+            "bot-runtime": ("bot-entrypoint.sh",),
+            "flow": ("flow-entrypoint.sh",),
+            "evolution-api": (),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            for component, assets in expected.items():
+                context = Path(temporary) / component
+                context.mkdir()
+                (context / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+                subprocess.run(
+                    ["sh", str(preparer), component, str(context)],
+                    check=True,
+                    cwd=PROVISIONING.parent,
+                )
+                dockerfile = (context / "Dockerfile.hml").read_text(encoding="utf-8")
+                for asset in assets:
+                    embedded = context / ".artgenial" / asset
+                    source = PROVISIONING / "commercial" / asset
+                    self.assertEqual(embedded.read_bytes(), source.read_bytes())
+                    self.assertIn(asset, dockerfile)
+                if not assets:
+                    self.assertFalse((context / ".artgenial").exists())
+
+    def test_web_workers_and_one_shots_reuse_the_same_images(self):
+        self.assertEqual(self.text.count("image: ${CRM_IMAGE:?}"), 3)
+        self.assertEqual(self.text.count("image: ${AUTH_IMAGE:?}"), 3)
+        for variable in set(IMAGE_VARIABLES) - {"CRM_IMAGE", "AUTH_IMAGE"}:
+            self.assertEqual(self.text.count(f"image: ${{{variable}:?}}"), 1, variable)
+
+    def test_cpu_limits_never_exceed_one_core(self):
+        limits = [float(value) for value in re.findall(r"(?m)^\s+cpus:\s*([0-9.]+)$", self.text)]
+        self.assertTrue(limits)
+        self.assertLessEqual(max(limits), 1.0)
+        self.assertIn(0.25, limits)
+        self.assertIn(0.5, limits)
+
+    def test_image_validator_accepts_only_digest_or_full_commit(self):
+        digest = "a" * 64
+        commit = "b" * 40
+        valid = {
+            variable: f"ghcr.io/jeduardocampos10/artgenial-hml-{variable.lower().replace('_image', '').replace('_', '-')}:{commit}"
+            for variable in IMAGE_VARIABLES
+        }
+        self.assertEqual(validate(valid), [])
+        valid["CRM_IMAGE"] = f"ghcr.io/jeduardocampos10/artgenial-hml-crm@sha256:{digest}"
+        self.assertEqual(validate(valid), [])
+        valid["CRM_IMAGE"] = "ghcr.io/jeduardocampos10/artgenial-hml-crm:develop"
+        self.assertEqual(len(validate(valid)), 1)
+
+    def test_data_services_remain_private(self):
+        for service in ("postgres", "redis", "rabbitmq", "clickhouse"):
+            block = self.text.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
+            self.assertNotIn("ports:", block, service)
+            self.assertNotIn("expose:", block, service)
+        self.assertIn("networks: [private]", self.text)
 
 
 if __name__ == "__main__":
