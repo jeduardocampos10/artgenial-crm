@@ -128,6 +128,20 @@ class CoolifyComposeTests(unittest.TestCase):
         stamp = (PROVISIONING / "commercial" / "mark_auth_migrations.rb").read_text(encoding="utf-8")
         self.assertIn("Auth migration stamp skipped for existing installation", stamp)
         self.assertIn("if User.exists?", stamp)
+        self.assertIn("ActiveRecord::SchemaMigration.new(connection)", stamp)
+        self.assertNotIn("connection.schema_migration", stamp)
+
+    def test_all_auth_migration_entrypoints_use_rails_71_schema_migration_api(self):
+        repository_root = PROVISIONING.parent
+        sources = {
+            "migration stamp": (PROVISIONING / "commercial" / "mark_auth_migrations.rb").read_text(encoding="utf-8"),
+            "Makefile": (repository_root / "Makefile").read_text(encoding="utf-8"),
+            "setup.sh": (repository_root / "setup.sh").read_text(encoding="utf-8"),
+        }
+        for name, source in sources.items():
+            with self.subTest(source=name):
+                self.assertIn("ActiveRecord::SchemaMigration.new(", source)
+                self.assertNotIn("connection.schema_migration", source)
 
     def test_all_relative_bind_mount_sources_exist(self):
         expected = {
