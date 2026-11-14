@@ -11,7 +11,8 @@ end
 versions = Dir[Rails.root.join('db', 'migrate', '*.rb')].sort.map do |file|
   File.basename(file).split('_').first
 end
-schema_migration = ActiveRecord::Base.connection.schema_migration
+connection = ActiveRecord::Base.connection
+schema_migration = ActiveRecord::SchemaMigration.new(connection)
 
 versions.each do |version|
   schema_migration.create_version(version)

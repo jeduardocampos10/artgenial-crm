@@ -207,7 +207,7 @@ success "CRM schema loaded"
 
 info "Marking auth migrations as applied..."
 docker compose run --rm evo-auth bundle exec rails runner \
-  "Dir['db/migrate/*.rb'].sort.map { |f| File.basename(f).split('_').first }.each { |v| begin; ActiveRecord::Base.connection.schema_migration.create_version(v); rescue ActiveRecord::RecordNotUnique; end }"
+  "schema_migration = ActiveRecord::SchemaMigration.new(ActiveRecord::Base.connection); Dir['db/migrate/*.rb'].sort.map { |f| File.basename(f).split('_').first }.each { |v| begin; schema_migration.create_version(v); rescue ActiveRecord::RecordNotUnique; end }"
 success "Auth migrations marked"
 
 info "Seeding CRM service..."

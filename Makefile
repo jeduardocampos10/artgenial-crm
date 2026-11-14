@@ -102,7 +102,7 @@ seed-crm: ## Create DB + load CRM master schema + mark auth migrations + seed CR
 	docker compose run --rm evo-crm bundle exec rails db:create db:schema:load
 	@echo "$(CYAN)Marking auth migrations as applied...$(RESET)"
 	docker compose run --rm evo-auth bundle exec rails runner \
-		"Dir['db/migrate/*.rb'].sort.map { |f| File.basename(f).split('_').first }.each { |v| begin; ActiveRecord::Base.connection.schema_migration.create_version(v); rescue ActiveRecord::RecordNotUnique; end }"
+		"schema_migration = ActiveRecord::SchemaMigration.new(ActiveRecord::Base.connection); Dir['db/migrate/*.rb'].sort.map { |f| File.basename(f).split('_').first }.each { |v| begin; schema_migration.create_version(v); rescue ActiveRecord::RecordNotUnique; end }"
 	@echo "$(CYAN)Seeding CRM service...$(RESET)"
 	docker compose run --rm evo-crm bundle exec rails db:seed
 	@echo "$(GREEN)CRM schema loaded and seeded.$(RESET)"
