@@ -7,8 +7,8 @@ x-common: &common
   init: true
   security_opt: [no-new-privileges:true]
   pids_limit: 1024
-  mem_limit: 4g
-  cpus: 2.0
+  mem_limit: 2g
+  cpus: 1.0
   stop_grace_period: 30s
   logging:
     driver: json-file
@@ -46,6 +46,7 @@ services:
   postgres:
     <<: *common
     image: pgvector/pgvector:pg16
+    cpus: 0.75
     environment:
       POSTGRES_DB: ${POSTGRES_DATABASE:?}
       POSTGRES_USER: ${POSTGRES_USERNAME:?}
@@ -60,6 +61,7 @@ services:
   redis:
     <<: *common
     image: redis:7-alpine
+    cpus: 0.25
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?}
     command: [sh, -c, 'exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes']
@@ -73,6 +75,7 @@ services:
   rabbitmq:
     <<: *common
     image: rabbitmq:3-alpine
+    cpus: 0.5
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?}
@@ -87,6 +90,7 @@ services:
   clickhouse:
     <<: *common
     image: clickhouse/clickhouse-server:25.8-alpine
+    cpus: 0.75
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USERNAME:?}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?}
@@ -102,10 +106,8 @@ services:
     <<: *common
     restart: "no"
     exclude_from_hc: true
-    build:
-      context: ./evo-ai-crm-community
-      dockerfile: docker/Dockerfile
-      args: {BUNDLE_WITHOUT: "", RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}
+    image: ${CRM_IMAGE:?}
+    cpus: 0.5
     environment:
       <<: *rails
       REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
@@ -120,9 +122,8 @@ services:
     <<: *common
     restart: "no"
     exclude_from_hc: true
-    build:
-      context: ./evo-auth-service-community
-      args: {RAILS_ENV: production}
+    image: ${AUTH_IMAGE:?}
+    cpus: 0.5
     environment:
       <<: *rails
       REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/1
@@ -156,6 +157,7 @@ services:
     restart: "no"
     exclude_from_hc: true
     image: pgvector/pgvector:pg16
+    cpus: 0.25
     environment:
       PGHOST: postgres
       PGPORT: "5432"
@@ -174,9 +176,7 @@ services:
 
   evo-auth:
     <<: *common
-    build:
-      context: ./evo-auth-service-community
-      args: {RAILS_ENV: production}
+    image: ${AUTH_IMAGE:?}
     expose: ["3001"]
     environment:
       <<: [*rails, *mail]
@@ -248,9 +248,8 @@ services:
 
   evo-auth-sidekiq:
     <<: *common
-    build:
-      context: ./evo-auth-service-community
-      args: {RAILS_ENV: production}
+    image: ${AUTH_IMAGE:?}
+    cpus: 0.5
     environment:
       <<: [*rails, *mail]
       RUN_MIGRATIONS: "false"
@@ -267,10 +266,7 @@ services:
 
   evo-crm:
     <<: *common
-    build:
-      context: ./evo-ai-crm-community
-      dockerfile: docker/Dockerfile
-      args: {BUNDLE_WITHOUT: "", RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}
+    image: ${CRM_IMAGE:?}
     expose: ["3000"]
     environment:
       <<: [*rails, *mail]
@@ -322,10 +318,8 @@ services:
 
   evo-crm-sidekiq:
     <<: *common
-    build:
-      context: ./evo-ai-crm-community
-      dockerfile: docker/Dockerfile
-      args: {BUNDLE_WITHOUT: "", RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}
+    image: ${CRM_IMAGE:?}
+    cpus: 0.5
     environment:
       <<: [*rails, *mail]
       RUN_MIGRATIONS: "false"
@@ -352,7 +346,7 @@ services:
 
   evo-core:
     <<: *common
-    build: {context: ./evo-ai-core-service-community}
+    image: ${CORE_IMAGE:?}
     expose: ["5555"]
     environment:
       DB_HOST: postgres
@@ -379,7 +373,7 @@ services:
 
   evo-processor:
     <<: *common
-    build: {context: ./evo-ai-processor-community}
+    image: ${PROCESSOR_IMAGE:?}
     expose: ["8000"]
     entrypoint: [sh, -ec]
     command: ['export POSTGRES_CONNECTION_STRING="postgresql://$${POSTGRES_USERNAME:?}:$${POSTGRES_PASSWORD:?}@postgres:5432/$${POSTGRES_DATABASE:?}"; alembic upgrade head; python -m scripts.run_seeders; exec uvicorn src.main:app --host "$$HOST" --port "$$PORT"']
@@ -416,7 +410,8 @@ services:
 
   evo-bot-runtime:
     <<: *common
-    build: {context: ./evo-bot-runtime}
+    image: ${BOT_RUNTIME_IMAGE:?}
+    cpus: 0.5
     environment:
       LISTEN_ADDR: 0.0.0.0:8080
       REDIS_PASSWORD: ${REDIS_PASSWORD:?}
@@ -436,25 +431,7 @@ services:
 
   evolution-api:
     <<: *common
-    build: {context: ./evolution-api}
-    entrypoint: [/bin/bash, -c]
-    command:
-      - |
-        rm -f .env
-        cat > prisma.config.ts <<'PRISMA_CONFIG'
-        import path from 'node:path';
-        import { defineConfig, env } from 'prisma/config';
-        const provider = process.env.DATABASE_PROVIDER ?? 'postgresql';
-        const schemaFile = provider === 'mysql' ? 'mysql-schema.prisma' :
-          provider === 'psql_bouncer' ? 'psql_bouncer-schema.prisma' : 'postgresql-schema.prisma';
-        export default defineConfig({
-          schema: path.join('prisma', schemaFile),
-          migrations: { path: path.join('prisma', 'migrations') },
-          datasource: { url: env('DATABASE_CONNECTION_URI') },
-        });
-        PRISMA_CONFIG
-        . ./Docker/scripts/deploy_database.sh
-        exec npm run start:prod
+    image: ${EVOLUTION_API_IMAGE:?}
     environment:
       SERVER_TYPE: http
       SERVER_PORT: "8080"
@@ -486,7 +463,7 @@ services:
 
   evo-flow:
     <<: *common
-    build: {context: ./evo-flow-community}
+    image: ${FLOW_IMAGE:?}
     expose: ["3334"]
     entrypoint: [sh, -ec]
     command: ['export POSTGRES_DB_PASSWORD="$${POSTGRES_PASSWORD:?}"; export RABBITMQ_URL="amqp://$${RABBITMQ_DEFAULT_USER:?}:$${RABBITMQ_DEFAULT_PASS:?}@rabbitmq:5672"; node_modules/.bin/typeorm migration:run -d dist/database/ormconfig.js; exec node dist/main.js']
@@ -536,15 +513,8 @@ services:
 
   evo-frontend:
     <<: *common
-    build:
-      context: ./evo-ai-frontend-community
-      args:
-        VITE_API_URL: ${VITE_API_URL:?}
-        VITE_AUTH_API_URL: ${VITE_AUTH_API_URL:?}
-        VITE_WS_URL: ${VITE_WS_URL:?}
-        VITE_EVOAI_API_URL: ${VITE_EVOAI_API_URL:?}
-        VITE_AGENT_PROCESSOR_URL: ${VITE_AGENT_PROCESSOR_URL:?}
-        VITE_EVOFLOW_API_URL: ${VITE_EVOFLOW_API_URL:?}
+    image: ${FRONTEND_IMAGE:?}
+    cpus: 0.25
     expose: ["80"]
     environment:
       VITE_APP_ENV: staging
