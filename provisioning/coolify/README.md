@@ -122,3 +122,26 @@ A prova só é válida com execução real:
 - Caso contrário, restaure o backup pré-upgrade em recurso isolado e então reative a release N.
 
 Nenhuma dessas provas libera produção ou o piloto WhatsApp automaticamente.
+# Coolify homologation topology
+
+This topology is pull-only: Coolify must never build application source. The
+application images are published by CI only from `develop` or
+`artgenial/develop`; pull requests never receive registry credentials.
+
+Before changing the homologation resource, copy the successful workflow image
+references into Coolify. Prefer the digest shown by GHCR; a full 40-character
+commit tag is also accepted. Validate an exported, non-secret env file locally:
+
+```sh
+python3 provisioning/coolify/validate_images.py /path/to/coolify-images.env
+python3 -m unittest provisioning.tests.test_coolify
+```
+
+Required image variables are `AUTH_IMAGE`, `CRM_IMAGE`, `FRONTEND_IMAGE`,
+`CORE_IMAGE`, `PROCESSOR_IMAGE`, `BOT_RUNTIME_IMAGE`, `EVOLUTION_API_IMAGE`, and
+`FLOW_IMAGE`. `CRM_IMAGE` is deliberately shared by schema-init, web, and
+Sidekiq; `AUTH_IMAGE` is shared by migration-stamp, web, and Sidekiq.
+
+Do not point this file at the production `artgenial-crm` resource or
+`crm.artgenial.com.br`. Promotion is a separate, reviewed operation after all
+component workflows and the root CI are green.

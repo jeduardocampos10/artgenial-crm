@@ -2,6 +2,8 @@ import re
 import unittest
 from pathlib import Path
 
+from provisioning.coolify.validate_images import IMAGE_VARIABLES, validate
+
 
 PROVISIONING = Path(__file__).resolve().parents[1]
 COMPOSE = PROVISIONING / "coolify" / "compose.yaml"
@@ -63,6 +65,7 @@ class CoolifyComposeTests(unittest.TestCase):
             "AUTH_SERVICE_URL", "CORS_ORIGINS", "API_URL", "APP_URL",
             "MEDIA_HOST_ALLOWLIST", "VITE_API_URL", "VITE_AUTH_API_URL", "VITE_WS_URL",
             "VITE_EVOAI_API_URL", "VITE_AGENT_PROCESSOR_URL", "VITE_EVOFLOW_API_URL",
+            *IMAGE_VARIABLES,
         }
         for key in required:
             self.assertIn("${" + key + ":?}", self.text, key)
@@ -157,15 +160,42 @@ class CoolifyComposeTests(unittest.TestCase):
         for relative in expected:
             self.assertTrue((repository_root / relative).is_file(), relative)
 
-    def test_coolify_project_directory_paths_never_escape_repository_root(self):
-        self.assertNotIn("../", self.text)
-        for context in (
-            "./evo-ai-crm-community", "./evo-auth-service-community",
-            "./evo-ai-core-service-community", "./evo-ai-processor-community",
-            "./evo-bot-runtime", "./evolution-api", "./evo-flow-community",
-            "./evo-ai-frontend-community",
-        ):
-            self.assertIn("context: " + context, self.text)
+    def test_final_coolify_topology_never_builds_on_the_server(self):
+        self.assertNotRegex(self.text, r"(?m)^\s+build:\s*(?:$|\{)")
+        self.assertNotIn("context:", self.text)
+
+    def test_web_workers_and_one_shots_reuse_the_same_images(self):
+        self.assertEqual(self.text.count("image: ${CRM_IMAGE:?}"), 3)
+        self.assertEqual(self.text.count("image: ${AUTH_IMAGE:?}"), 3)
+        for variable in set(IMAGE_VARIABLES) - {"CRM_IMAGE", "AUTH_IMAGE"}:
+            self.assertEqual(self.text.count(f"image: ${{{variable}:?}}"), 1, variable)
+
+    def test_cpu_limits_never_exceed_one_core(self):
+        limits = [float(value) for value in re.findall(r"(?m)^\s+cpus:\s*([0-9.]+)$", self.text)]
+        self.assertTrue(limits)
+        self.assertLessEqual(max(limits), 1.0)
+        self.assertIn(0.25, limits)
+        self.assertIn(0.5, limits)
+
+    def test_image_validator_accepts_only_digest_or_full_commit(self):
+        digest = "a" * 64
+        commit = "b" * 40
+        valid = {
+            variable: f"ghcr.io/jeduardocampos10/artgenial-hml-{variable.lower().replace('_image', '').replace('_', '-')}:{commit}"
+            for variable in IMAGE_VARIABLES
+        }
+        self.assertEqual(validate(valid), [])
+        valid["CRM_IMAGE"] = f"ghcr.io/jeduardocampos10/artgenial-hml-crm@sha256:{digest}"
+        self.assertEqual(validate(valid), [])
+        valid["CRM_IMAGE"] = "ghcr.io/jeduardocampos10/artgenial-hml-crm:develop"
+        self.assertEqual(len(validate(valid)), 1)
+
+    def test_data_services_remain_private(self):
+        for service in ("postgres", "redis", "rabbitmq", "clickhouse"):
+            block = self.text.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
+            self.assertNotIn("ports:", block, service)
+            self.assertNotIn("expose:", block, service)
+        self.assertIn("networks: [private]", self.text)
 
 
 if __name__ == "__main__":
