@@ -112,8 +112,6 @@ services:
       <<: *rails
       REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
     entrypoint: [sh, /opt/artgenial/prepare-shared-schema.sh]
-    volumes:
-      - ./provisioning/coolify/prepare-shared-schema.sh:/opt/artgenial/prepare-shared-schema.sh:ro
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -129,26 +127,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/1
       DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY:?}
     entrypoint: [bundle]
-    command:
-      - exec
-      - rails
-      - runner
-      - |
-        connection = ActiveRecord::Base.connection
-        unless connection.select_value("SELECT to_regclass('public.users')")
-          puts "Auth migration stamp skipped: Auth tables are absent; db:migrate will create them"
-          exit
-        end
-        if User.exists?
-          puts "Auth migration stamp skipped for existing installation"
-          exit
-        end
-        schema_migration = ActiveRecord::SchemaMigration.new(connection)
-        Dir[Rails.root.join("db", "migrate", "*.rb")].sort.each do |file|
-          schema_migration.create_version(File.basename(file).split("_").first)
-        rescue ActiveRecord::RecordNotUnique
-          nil
-        end
+    command: [exec, rails, runner, /opt/artgenial/mark_auth_migrations.rb]
     depends_on:
       crm-schema-init: {condition: service_completed_successfully}
 
@@ -419,8 +398,8 @@ services:
       BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET:?}
       MEDIA_HOST_ALLOWLIST: ${MEDIA_HOST_ALLOWLIST:?}
       AI_CALL_TIMEOUT_SECONDS: "90"
-    entrypoint: [sh, -ec]
-    command: ['export REDIS_URL="redis://:$${REDIS_PASSWORD:?}@redis:6379"; exec /app/evo-bot-runtime']
+    entrypoint: [sh, /opt/artgenial/bot-entrypoint.sh]
+    command: [/app/evo-bot-runtime]
     depends_on:
       evo-processor: {condition: service_healthy}
     healthcheck:
