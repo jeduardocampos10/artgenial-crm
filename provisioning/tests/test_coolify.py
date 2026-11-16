@@ -120,7 +120,10 @@ class CoolifyComposeTests(unittest.TestCase):
         self.assertIn("crm-schema-init: {condition: service_completed_successfully}", self.text)
         self.assertIn("auth-migration-stamp: {condition: service_completed_successfully}", self.text)
         self.assertIn("flow-db-init: {condition: service_completed_successfully}", self.text)
-        self.assertIn("mark_auth_migrations.rb:/opt/artgenial/mark_auth_migrations.rb:ro", self.text)
+        self.assertNotIn("mark_auth_migrations.rb:/opt/artgenial/mark_auth_migrations.rb:ro", self.text)
+        self.assertNotIn("/opt/artgenial/mark_auth_migrations.rb", self.text)
+        self.assertIn("ActiveRecord::SchemaMigration.new(ActiveRecord::Base.connection)", self.text)
+        self.assertIn("Auth migration stamp skipped for existing installation", self.text)
         self.assertIn("prepare-shared-schema.sh:/opt/artgenial/prepare-shared-schema.sh:ro", self.text)
         self.assertIn("SELECT 1 FROM pg_database", self.text)
         self.assertEqual(self.text.count('restart: "no"'), 3)
@@ -146,7 +149,6 @@ class CoolifyComposeTests(unittest.TestCase):
     def test_all_relative_bind_mount_sources_exist(self):
         expected = {
             "provisioning/coolify/prepare-shared-schema.sh",
-            "provisioning/commercial/mark_auth_migrations.rb",
             "provisioning/commercial/bootstrap_auth.rb",
             "provisioning/commercial/bootstrap_base.rb",
             "provisioning/commercial/processor-entrypoint.sh",
