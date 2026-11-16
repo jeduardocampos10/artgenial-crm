@@ -128,9 +128,23 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/1
       DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY:?}
     entrypoint: [bundle]
-    command: [exec, rails, runner, /opt/artgenial/mark_auth_migrations.rb]
-    volumes:
-      - ./provisioning/commercial/mark_auth_migrations.rb:/opt/artgenial/mark_auth_migrations.rb:ro
+    # Coolify executes Compose from a helper container; do not depend on a repository
+    # bind mount being propagated into this one-shot service.
+    command:
+      - exec
+      - rails
+      - runner
+      - |
+        if User.exists?
+          puts "Auth migration stamp skipped for existing installation"
+          exit
+        end
+        schema_migration = ActiveRecord::SchemaMigration.new(ActiveRecord::Base.connection)
+        Dir[Rails.root.join("db", "migrate", "*.rb")].sort.each do |file|
+          schema_migration.create_version(File.basename(file).split("_").first)
+        rescue ActiveRecord::RecordNotUnique
+          nil
+        end
     depends_on:
       crm-schema-init: {condition: service_completed_successfully}
 
