@@ -1,16 +1,17 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 2 ]; then
-  echo "usage: $0 COMPONENT CONTEXT" >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+  echo "usage: $0 COMPONENT CONTEXT [DOCKERFILE]" >&2
   exit 2
 fi
 
 component="$1"
 context="$2"
+dockerfile="${3:-$context/Dockerfile}"
 root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
-test -f "$context/Dockerfile"
-cp "$context/Dockerfile" "$context/Dockerfile.hml"
+test -f "$dockerfile"
+cp "$dockerfile" "$context/Dockerfile.hml"
 mkdir -p "$context/.artgenial"
 
 case "$component" in
@@ -25,6 +26,27 @@ RUN test -f /opt/artgenial/mark_auth_migrations.rb \
  && test -f /opt/artgenial/bootstrap_auth.rb \
  && chmod 0444 /opt/artgenial/*.rb
 USER rails:rails
+EOF
+    ;;
+  crm)
+    install -m 0555 "$root/provisioning/coolify/prepare-shared-schema.sh" "$context/.artgenial/prepare-shared-schema.sh"
+    install -m 0444 "$root/provisioning/commercial/bootstrap_base.rb" "$context/.artgenial/bootstrap_base.rb"
+    cat >>"$context/Dockerfile.hml" <<'EOF'
+
+USER root
+COPY .artgenial/ /opt/artgenial/
+RUN test -x /opt/artgenial/prepare-shared-schema.sh \
+ && test -f /opt/artgenial/bootstrap_base.rb \
+ && chmod 0444 /opt/artgenial/bootstrap_base.rb
+USER app
+EOF
+    ;;
+  processor)
+    install -m 0555 "$root/provisioning/commercial/processor-entrypoint.sh" "$context/.artgenial/processor-entrypoint.sh"
+    cat >>"$context/Dockerfile.hml" <<'EOF'
+
+COPY .artgenial/processor-entrypoint.sh /opt/artgenial/processor-entrypoint.sh
+RUN test -x /opt/artgenial/processor-entrypoint.sh
 EOF
     ;;
   bot-runtime)

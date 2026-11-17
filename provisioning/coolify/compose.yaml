@@ -177,40 +177,7 @@ services:
         rm -f /rails/tmp/pids/server.pid
         bundle exec rails db:create
         bundle exec rails db:migrate
-        bundle exec rails runner - <<'RUBY'
-        ActiveRecord::Base.transaction do
-          ActiveRecord::Base.connection.execute('SELECT pg_advisory_xact_lock(73829104)')
-          load Rails.root.join('db', 'seeds', 'rbac.rb') unless Role.exists?(key: 'super_admin')
-          account = RuntimeConfig.account
-          if account
-            raise 'Account identity conflict' unless account['name'] == ENV.fetch('INSTALLATION_NAME') &&
-                                                     account['domain'] == ENV.fetch('FRONTEND_HOST')
-          else
-            RuntimeConfig.set('account', {
-              id: SecureRandom.uuid,
-              name: ENV.fetch('INSTALLATION_NAME'),
-              domain: ENV.fetch('FRONTEND_HOST'),
-              support_email: ENV.fetch('ADMIN_EMAIL'),
-              locale: 'pt-BR', status: 'active', features: {}, settings: {}, custom_attributes: {}
-            })
-          end
-          raise 'Account bootstrap failed' unless RuntimeConfig.account
-          email = ENV.fetch('ADMIN_EMAIL').downcase
-          user = User.from_email(email)
-          if user
-            raise 'Existing administrator identity conflict' unless user.name == ENV.fetch('ADMIN_NAME') &&
-                                                                   user.has_role?('super_admin')
-          else
-            raise 'Existing users require manual review' if User.exists?
-            password = ENV.fetch('ADMIN_PASSWORD')
-            user = User.create!(name: ENV.fetch('ADMIN_NAME'), email: email, password: password,
-                                password_confirmation: password, provider: 'email', uid: email,
-                                availability: :online, mfa_method: :disabled,
-                                confirmed_at: Time.current, type: 'User')
-            UserRole.assign_role_to_user(user, Role.find_by!(key: 'super_admin'))
-          end
-        end
-        RUBY
+        bundle exec rails runner /opt/artgenial/bootstrap_auth.rb
         exec bundle exec rails server -b 0.0.0.0 -p 3001
     volumes:
       - auth_storage:/rails/storage
@@ -273,14 +240,7 @@ services:
       - sh
       - -c
       - |
-        bundle exec rails runner - <<'RUBY'
-        manifest = Artgenial::Templates::Loader.new.load(template_key: 'artgenial.base', version: '1')
-        actor = User.find_by!(email: ENV.fetch('ADMIN_EMAIL').downcase)
-        result = Artgenial::Templates::Applier.new(
-          installation_key: ENV.fetch('INSTALLATION_KEY'), manifest: manifest, actor: actor
-        ).call
-        raise 'Base ArtGenial not applied' unless %i[applied already_applied].include?(result.status)
-        RUBY
+        bundle exec rails runner /opt/artgenial/bootstrap_base.rb
         exec bundle exec rails s -p 3000 -b 0.0.0.0
     volumes:
       - crm_storage:/app/storage
@@ -354,8 +314,8 @@ services:
     <<: *common
     image: ${PROCESSOR_IMAGE:?}
     expose: ["8000"]
-    entrypoint: [sh, -ec]
-    command: ['export POSTGRES_CONNECTION_STRING="postgresql://$${POSTGRES_USERNAME:?}:$${POSTGRES_PASSWORD:?}@postgres:5432/$${POSTGRES_DATABASE:?}"; alembic upgrade head; python -m scripts.run_seeders; exec uvicorn src.main:app --host "$$HOST" --port "$$PORT"']
+    entrypoint: [sh, /opt/artgenial/processor-entrypoint.sh]
+    command: [sh, -ec, 'alembic upgrade head; python -m scripts.run_seeders; exec uvicorn src.main:app --host "$$HOST" --port "$$PORT"']
     environment:
       POSTGRES_USERNAME: ${POSTGRES_USERNAME:?}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
@@ -411,6 +371,24 @@ services:
   evolution-api:
     <<: *common
     image: ${EVOLUTION_API_IMAGE:?}
+    entrypoint: [/bin/bash, -c]
+    command:
+      - |
+        rm -f .env
+        cat > prisma.config.ts <<'PRISMA_CONFIG'
+        import path from 'node:path';
+        import { defineConfig, env } from 'prisma/config';
+        const provider = process.env.DATABASE_PROVIDER ?? 'postgresql';
+        const schemaFile = provider === 'mysql' ? 'mysql-schema.prisma' :
+          provider === 'psql_bouncer' ? 'psql_bouncer-schema.prisma' : 'postgresql-schema.prisma';
+        export default defineConfig({
+          schema: path.join('prisma', schemaFile),
+          migrations: { path: path.join('prisma', 'migrations') },
+          datasource: { url: env('DATABASE_CONNECTION_URI') },
+        });
+        PRISMA_CONFIG
+        . ./Docker/scripts/deploy_database.sh
+        exec npm run start:prod
     environment:
       SERVER_TYPE: http
       SERVER_PORT: "8080"
@@ -444,8 +422,7 @@ services:
     <<: *common
     image: ${FLOW_IMAGE:?}
     expose: ["3334"]
-    entrypoint: [sh, -ec]
-    command: ['export POSTGRES_DB_PASSWORD="$${POSTGRES_PASSWORD:?}"; export RABBITMQ_URL="amqp://$${RABBITMQ_DEFAULT_USER:?}:$${RABBITMQ_DEFAULT_PASS:?}@rabbitmq:5672"; node_modules/.bin/typeorm migration:run -d dist/database/ormconfig.js; exec node dist/main.js']
+    entrypoint: [sh, /opt/artgenial/flow-entrypoint.sh]
     environment:
       NODE_ENV: production
       RUN_MODE: api

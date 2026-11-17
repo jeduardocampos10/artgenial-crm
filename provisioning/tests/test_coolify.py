@@ -155,7 +155,7 @@ class CoolifyComposeTests(unittest.TestCase):
                 self.assertNotIn("connection.schema_migration", source)
 
     def test_coolify_critical_startup_assets_do_not_depend_on_bind_mounts(self):
-        self.assertIn("prepare-shared-schema.sh:/opt/artgenial/prepare-shared-schema.sh:ro", self.text)
+        self.assertNotIn("prepare-shared-schema.sh:/opt/artgenial/prepare-shared-schema.sh:ro", self.text)
         for forbidden in (
             "bootstrap_auth.rb:/opt/artgenial/bootstrap_auth.rb:ro",
             "bootstrap_base.rb:/opt/artgenial/bootstrap_base.rb:ro",
@@ -208,6 +208,8 @@ class CoolifyComposeTests(unittest.TestCase):
         preparer = PROVISIONING / "coolify" / "prepare-hml-image-context.sh"
         expected = {
             "auth": ("mark_auth_migrations.rb", "bootstrap_auth.rb"),
+            "crm": ("prepare-shared-schema.sh", "bootstrap_base.rb"),
+            "processor": ("processor-entrypoint.sh",),
             "bot-runtime": ("bot-entrypoint.sh",),
             "flow": ("flow-entrypoint.sh",),
             "evolution-api": (),
@@ -216,16 +218,19 @@ class CoolifyComposeTests(unittest.TestCase):
             for component, assets in expected.items():
                 context = Path(temporary) / component
                 context.mkdir()
-                (context / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+                source_dockerfile = context / ("docker/Dockerfile" if component == "crm" else "Dockerfile")
+                source_dockerfile.parent.mkdir(parents=True, exist_ok=True)
+                source_dockerfile.write_text("FROM scratch\n", encoding="utf-8")
                 subprocess.run(
-                    ["sh", str(preparer), component, str(context)],
+                    ["sh", str(preparer), component, str(context), str(source_dockerfile)],
                     check=True,
                     cwd=PROVISIONING.parent,
                 )
                 dockerfile = (context / "Dockerfile.hml").read_text(encoding="utf-8")
                 for asset in assets:
                     embedded = context / ".artgenial" / asset
-                    source = PROVISIONING / "commercial" / asset
+                    source_dir = "coolify" if asset == "prepare-shared-schema.sh" else "commercial"
+                    source = PROVISIONING / source_dir / asset
                     self.assertEqual(embedded.read_bytes(), source.read_bytes())
                     self.assertIn(asset, dockerfile)
                 if not assets:
