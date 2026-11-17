@@ -67,7 +67,7 @@ RUN test -x /opt/artgenial/flow-entrypoint.sh
 USER nestjs
 EOF
     ;;
-  evolution-api)
+  frontend|core|evolution-api)
     rmdir "$context/.artgenial"
     ;;
   *)
