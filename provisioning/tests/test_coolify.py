@@ -235,6 +235,8 @@ class CoolifyComposeTests(unittest.TestCase):
                     source = PROVISIONING / source_dir / asset
                     self.assertEqual(embedded.read_bytes(), source.read_bytes())
                     self.assertIn(asset, dockerfile)
+                if component == "crm":
+                    self.assertNotIn("USER app", dockerfile)
                 if not assets:
                     self.assertFalse((context / ".artgenial").exists())
 
