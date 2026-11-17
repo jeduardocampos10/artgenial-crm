@@ -27,6 +27,12 @@ jobs:
           - component: crm
             context: evo-ai-crm-community
             dockerfile: evo-ai-crm-community/docker/Dockerfile
+          - component: frontend
+            context: evo-ai-frontend-community
+            dockerfile: evo-ai-frontend-community/Dockerfile
+          - component: core
+            context: evo-ai-core-service-community
+            dockerfile: evo-ai-core-service-community/Dockerfile
           - component: processor
             context: evo-ai-processor-community
             dockerfile: evo-ai-processor-community/Dockerfile

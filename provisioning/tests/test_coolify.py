@@ -212,6 +212,8 @@ class CoolifyComposeTests(unittest.TestCase):
             "processor": ("processor-entrypoint.sh",),
             "bot-runtime": ("bot-entrypoint.sh",),
             "flow": ("flow-entrypoint.sh",),
+            "frontend": (),
+            "core": (),
             "evolution-api": (),
         }
         with tempfile.TemporaryDirectory() as temporary:
