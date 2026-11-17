@@ -295,7 +295,7 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:?}
     entrypoint: /app/docker/entrypoints/rails.sh
     command:
-      - bash
+      - sh
       - -c
       - |
         bundle exec rails runner - <<'RUBY'
