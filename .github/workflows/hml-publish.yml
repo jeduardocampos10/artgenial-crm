@@ -47,9 +47,11 @@ jobs:
       - name: Checkout only this build context
         env:
           CONTEXT: ${{ matrix.context }}
+          SUBMODULE_TOKEN: ${{ secrets.ARTGENIAL_SUBMODULES_TOKEN }}
         run: |
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$SUBMODULE_TOKEN" | base64 -w0)"
           git submodule sync -- "$CONTEXT"
-          git submodule update --init -- "$CONTEXT"
+          git -c http.https://github.com/.extraheader="$auth_header" submodule update --init -- "$CONTEXT"
       - name: Embed ArtGenial startup assets in this image context
         env:
           COMPONENT: ${{ matrix.component }}
