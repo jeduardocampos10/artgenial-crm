@@ -7,8 +7,8 @@ x-common: &common
   init: true
   security_opt: [no-new-privileges:true]
   pids_limit: 1024
-  mem_limit: 4g
-  cpus: 2.0
+  mem_limit: 2g
+  cpus: 1.0
   stop_grace_period: 30s
   logging:
     driver: json-file
@@ -46,6 +46,7 @@ services:
   postgres:
     <<: *common
     image: pgvector/pgvector:pg16
+    cpus: 0.75
     environment:
       POSTGRES_DB: ${POSTGRES_DATABASE:?}
       POSTGRES_USER: ${POSTGRES_USERNAME:?}
@@ -60,6 +61,7 @@ services:
   redis:
     <<: *common
     image: redis:7-alpine
+    cpus: 0.25
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?}
     command: [sh, -c, 'exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes']
@@ -73,6 +75,7 @@ services:
   rabbitmq:
     <<: *common
     image: rabbitmq:3-alpine
+    cpus: 0.5
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?}
@@ -87,6 +90,7 @@ services:
   clickhouse:
     <<: *common
     image: clickhouse/clickhouse-server:25.8-alpine
+    cpus: 0.75
     environment:
       CLICKHOUSE_USER: ${CLICKHOUSE_USERNAME:?}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?}
@@ -102,16 +106,12 @@ services:
     <<: *common
     restart: "no"
     exclude_from_hc: true
-    build:
-      context: ./evo-ai-crm-community
-      dockerfile: docker/Dockerfile
-      args: {BUNDLE_WITHOUT: "", RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}
+    image: ${CRM_IMAGE:?}
+    cpus: 0.5
     environment:
       <<: *rails
       REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
     entrypoint: [sh, /opt/artgenial/prepare-shared-schema.sh]
-    volumes:
-      - ./provisioning/coolify/prepare-shared-schema.sh:/opt/artgenial/prepare-shared-schema.sh:ro
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -120,34 +120,14 @@ services:
     <<: *common
     restart: "no"
     exclude_from_hc: true
-    build:
-      context: ./evo-auth-service-community
-      args: {RAILS_ENV: production}
+    image: ${AUTH_IMAGE:?}
+    cpus: 0.5
     environment:
       <<: *rails
       REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/1
       DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY:?}
     entrypoint: [bundle]
-    command:
-      - exec
-      - rails
-      - runner
-      - |
-        connection = ActiveRecord::Base.connection
-        unless connection.select_value("SELECT to_regclass('public.users')")
-          puts "Auth migration stamp skipped: Auth tables are absent; db:migrate will create them"
-          exit
-        end
-        if User.exists?
-          puts "Auth migration stamp skipped for existing installation"
-          exit
-        end
-        schema_migration = ActiveRecord::SchemaMigration.new(connection)
-        Dir[Rails.root.join("db", "migrate", "*.rb")].sort.each do |file|
-          schema_migration.create_version(File.basename(file).split("_").first)
-        rescue ActiveRecord::RecordNotUnique
-          nil
-        end
+    command: [exec, rails, runner, /opt/artgenial/mark_auth_migrations.rb]
     depends_on:
       crm-schema-init: {condition: service_completed_successfully}
 
@@ -156,6 +136,7 @@ services:
     restart: "no"
     exclude_from_hc: true
     image: pgvector/pgvector:pg16
+    cpus: 0.25
     environment:
       PGHOST: postgres
       PGPORT: "5432"
@@ -174,9 +155,7 @@ services:
 
   evo-auth:
     <<: *common
-    build:
-      context: ./evo-auth-service-community
-      args: {RAILS_ENV: production}
+    image: ${AUTH_IMAGE:?}
     expose: ["3001"]
     environment:
       <<: [*rails, *mail]
@@ -198,40 +177,7 @@ services:
         rm -f /rails/tmp/pids/server.pid
         bundle exec rails db:create
         bundle exec rails db:migrate
-        bundle exec rails runner - <<'RUBY'
-        ActiveRecord::Base.transaction do
-          ActiveRecord::Base.connection.execute('SELECT pg_advisory_xact_lock(73829104)')
-          load Rails.root.join('db', 'seeds', 'rbac.rb') unless Role.exists?(key: 'super_admin')
-          account = RuntimeConfig.account
-          if account
-            raise 'Account identity conflict' unless account['name'] == ENV.fetch('INSTALLATION_NAME') &&
-                                                     account['domain'] == ENV.fetch('FRONTEND_HOST')
-          else
-            RuntimeConfig.set('account', {
-              id: SecureRandom.uuid,
-              name: ENV.fetch('INSTALLATION_NAME'),
-              domain: ENV.fetch('FRONTEND_HOST'),
-              support_email: ENV.fetch('ADMIN_EMAIL'),
-              locale: 'pt-BR', status: 'active', features: {}, settings: {}, custom_attributes: {}
-            })
-          end
-          raise 'Account bootstrap failed' unless RuntimeConfig.account
-          email = ENV.fetch('ADMIN_EMAIL').downcase
-          user = User.from_email(email)
-          if user
-            raise 'Existing administrator identity conflict' unless user.name == ENV.fetch('ADMIN_NAME') &&
-                                                                   user.has_role?('super_admin')
-          else
-            raise 'Existing users require manual review' if User.exists?
-            password = ENV.fetch('ADMIN_PASSWORD')
-            user = User.create!(name: ENV.fetch('ADMIN_NAME'), email: email, password: password,
-                                password_confirmation: password, provider: 'email', uid: email,
-                                availability: :online, mfa_method: :disabled,
-                                confirmed_at: Time.current, type: 'User')
-            UserRole.assign_role_to_user(user, Role.find_by!(key: 'super_admin'))
-          end
-        end
-        RUBY
+        bundle exec rails runner /opt/artgenial/bootstrap_auth.rb
         exec bundle exec rails server -b 0.0.0.0 -p 3001
     volumes:
       - auth_storage:/rails/storage
@@ -248,9 +194,8 @@ services:
 
   evo-auth-sidekiq:
     <<: *common
-    build:
-      context: ./evo-auth-service-community
-      args: {RAILS_ENV: production}
+    image: ${AUTH_IMAGE:?}
+    cpus: 0.5
     environment:
       <<: [*rails, *mail]
       RUN_MIGRATIONS: "false"
@@ -267,10 +212,7 @@ services:
 
   evo-crm:
     <<: *common
-    build:
-      context: ./evo-ai-crm-community
-      dockerfile: docker/Dockerfile
-      args: {BUNDLE_WITHOUT: "", RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}
+    image: ${CRM_IMAGE:?}
     expose: ["3000"]
     environment:
       <<: [*rails, *mail]
@@ -298,14 +240,7 @@ services:
       - sh
       - -c
       - |
-        bundle exec rails runner - <<'RUBY'
-        manifest = Artgenial::Templates::Loader.new.load(template_key: 'artgenial.base', version: '1')
-        actor = User.find_by!(email: ENV.fetch('ADMIN_EMAIL').downcase)
-        result = Artgenial::Templates::Applier.new(
-          installation_key: ENV.fetch('INSTALLATION_KEY'), manifest: manifest, actor: actor
-        ).call
-        raise 'Base ArtGenial not applied' unless %i[applied already_applied].include?(result.status)
-        RUBY
+        bundle exec rails runner /opt/artgenial/bootstrap_base.rb
         exec bundle exec rails s -p 3000 -b 0.0.0.0
     volumes:
       - crm_storage:/app/storage
@@ -322,10 +257,8 @@ services:
 
   evo-crm-sidekiq:
     <<: *common
-    build:
-      context: ./evo-ai-crm-community
-      dockerfile: docker/Dockerfile
-      args: {BUNDLE_WITHOUT: "", RAILS_ENV: production, RAILS_SERVE_STATIC_FILES: "false"}
+    image: ${CRM_IMAGE:?}
+    cpus: 0.5
     environment:
       <<: [*rails, *mail]
       RUN_MIGRATIONS: "false"
@@ -352,7 +285,7 @@ services:
 
   evo-core:
     <<: *common
-    build: {context: ./evo-ai-core-service-community}
+    image: ${CORE_IMAGE:?}
     expose: ["5555"]
     environment:
       DB_HOST: postgres
@@ -379,10 +312,10 @@ services:
 
   evo-processor:
     <<: *common
-    build: {context: ./evo-ai-processor-community}
+    image: ${PROCESSOR_IMAGE:?}
     expose: ["8000"]
-    entrypoint: [sh, -ec]
-    command: ['export POSTGRES_CONNECTION_STRING="postgresql://$${POSTGRES_USERNAME:?}:$${POSTGRES_PASSWORD:?}@postgres:5432/$${POSTGRES_DATABASE:?}"; alembic upgrade head; python -m scripts.run_seeders; exec uvicorn src.main:app --host "$$HOST" --port "$$PORT"']
+    entrypoint: [sh, /opt/artgenial/processor-entrypoint.sh]
+    command: [sh, -ec, 'alembic upgrade head; python -m scripts.run_seeders; exec uvicorn src.main:app --host "$$HOST" --port "$$PORT"']
     environment:
       POSTGRES_USERNAME: ${POSTGRES_USERNAME:?}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
@@ -416,7 +349,8 @@ services:
 
   evo-bot-runtime:
     <<: *common
-    build: {context: ./evo-bot-runtime}
+    image: ${BOT_RUNTIME_IMAGE:?}
+    cpus: 0.5
     environment:
       LISTEN_ADDR: 0.0.0.0:8080
       REDIS_PASSWORD: ${REDIS_PASSWORD:?}
@@ -424,8 +358,8 @@ services:
       BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET:?}
       MEDIA_HOST_ALLOWLIST: ${MEDIA_HOST_ALLOWLIST:?}
       AI_CALL_TIMEOUT_SECONDS: "90"
-    entrypoint: [sh, -ec]
-    command: ['export REDIS_URL="redis://:$${REDIS_PASSWORD:?}@redis:6379"; exec /app/evo-bot-runtime']
+    entrypoint: [sh, /opt/artgenial/bot-entrypoint.sh]
+    command: [/app/evo-bot-runtime]
     depends_on:
       evo-processor: {condition: service_healthy}
     healthcheck:
@@ -436,7 +370,7 @@ services:
 
   evolution-api:
     <<: *common
-    build: {context: ./evolution-api}
+    image: ${EVOLUTION_API_IMAGE:?}
     entrypoint: [/bin/bash, -c]
     command:
       - |
@@ -486,10 +420,9 @@ services:
 
   evo-flow:
     <<: *common
-    build: {context: ./evo-flow-community}
+    image: ${FLOW_IMAGE:?}
     expose: ["3334"]
-    entrypoint: [sh, -ec]
-    command: ['export POSTGRES_DB_PASSWORD="$${POSTGRES_PASSWORD:?}"; export RABBITMQ_URL="amqp://$${RABBITMQ_DEFAULT_USER:?}:$${RABBITMQ_DEFAULT_PASS:?}@rabbitmq:5672"; node_modules/.bin/typeorm migration:run -d dist/database/ormconfig.js; exec node dist/main.js']
+    entrypoint: [sh, /opt/artgenial/flow-entrypoint.sh]
     environment:
       NODE_ENV: production
       RUN_MODE: api
@@ -536,15 +469,8 @@ services:
 
   evo-frontend:
     <<: *common
-    build:
-      context: ./evo-ai-frontend-community
-      args:
-        VITE_API_URL: ${VITE_API_URL:?}
-        VITE_AUTH_API_URL: ${VITE_AUTH_API_URL:?}
-        VITE_WS_URL: ${VITE_WS_URL:?}
-        VITE_EVOAI_API_URL: ${VITE_EVOAI_API_URL:?}
-        VITE_AGENT_PROCESSOR_URL: ${VITE_AGENT_PROCESSOR_URL:?}
-        VITE_EVOFLOW_API_URL: ${VITE_EVOFLOW_API_URL:?}
+    image: ${FRONTEND_IMAGE:?}
+    cpus: 0.25
     expose: ["80"]
     environment:
       VITE_APP_ENV: staging
