@@ -167,7 +167,10 @@ class CoolifyComposeTests(unittest.TestCase):
     def test_evolution_prisma_receives_runtime_database_url(self):
         self.assertIn("DATABASE_CONNECTION_URI: postgresql://", self.text)
         self.assertIn("DATABASE_URL: postgresql://", self.text)
-        self.assertIn("rm -f .env && . ./Docker/scripts/deploy_database.sh", self.text)
+        self.assertIn("rm -f .env", self.text)
+        self.assertIn("cat > prisma.config.ts <<'PRISMA_CONFIG'", self.text)
+        self.assertIn("datasource: { url: env('DATABASE_CONNECTION_URI') }", self.text)
+        self.assertIn(". ./Docker/scripts/deploy_database.sh", self.text)
 
     def test_coolify_project_directory_paths_never_escape_repository_root(self):
         self.assertNotIn("../", self.text)
