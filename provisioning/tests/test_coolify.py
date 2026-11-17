@@ -164,6 +164,12 @@ class CoolifyComposeTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, self.text)
 
+    def test_crm_bootstrap_uses_shell_available_in_alpine_runtime(self):
+        crm = self.text.split("\n  evo-crm:\n", 1)[1].split("\n  evo-crm-sidekiq:\n", 1)[0]
+        self.assertIn("    command:\n      - sh\n      - -c\n", crm)
+        self.assertNotIn("      - bash\n", crm)
+        self.assertIn("exec bundle exec rails s -p 3000 -b 0.0.0.0", crm)
+
     def test_evolution_prisma_receives_runtime_database_url(self):
         self.assertIn("SERVER_TYPE: http", self.text)
         self.assertIn("DATABASE_CONNECTION_URI: postgresql://", self.text)
