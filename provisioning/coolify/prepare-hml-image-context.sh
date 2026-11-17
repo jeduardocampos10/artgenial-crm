@@ -38,7 +38,6 @@ COPY .artgenial/ /opt/artgenial/
 RUN test -x /opt/artgenial/prepare-shared-schema.sh \
  && test -f /opt/artgenial/bootstrap_base.rb \
  && chmod 0444 /opt/artgenial/bootstrap_base.rb
-USER app
 EOF
     ;;
   processor)
