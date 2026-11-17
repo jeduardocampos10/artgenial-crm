@@ -3,6 +3,11 @@
 # Auth migrations already represented by that schema. On resume/redeploy with
 # Auth data, it leaves any new migration unstamped so the normal db:migrate step
 # can apply upgrades instead of skipping them.
+connection = ActiveRecord::Base.connection
+unless connection.select_value("SELECT to_regclass('public.users')")
+  puts 'Auth migration stamp skipped: Auth tables are absent; db:migrate will create them'
+  exit
+end
 if User.exists?
   puts 'Auth migration stamp skipped for existing installation'
   exit
