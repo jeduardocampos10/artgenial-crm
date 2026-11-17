@@ -165,6 +165,7 @@ class CoolifyComposeTests(unittest.TestCase):
             self.assertNotIn(forbidden, self.text)
 
     def test_evolution_prisma_receives_runtime_database_url(self):
+        self.assertIn("SERVER_TYPE: http", self.text)
         self.assertIn("DATABASE_CONNECTION_URI: postgresql://", self.text)
         self.assertIn("DATABASE_URL: postgresql://", self.text)
         self.assertIn("rm -f .env", self.text)
