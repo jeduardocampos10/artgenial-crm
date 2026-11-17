@@ -69,8 +69,11 @@ class CoolifyComposeTests(unittest.TestCase):
 
     def test_bootstrap_password_is_optional_only_after_first_bootstrap(self):
         self.assertEqual(self.text.count("${ADMIN_BOOTSTRAP_PASSWORD:-}"), 1)
-        self.assertIn("bootstrap_auth.rb:/opt/artgenial/bootstrap_auth.rb:ro", self.text)
-        self.assertIn("bootstrap_base.rb:/opt/artgenial/bootstrap_base.rb:ro", self.text)
+        self.assertIn("SELECT pg_advisory_xact_lock(73829104)", self.text)
+        self.assertIn("Account bootstrap failed", self.text)
+        self.assertIn("Base ArtGenial not applied", self.text)
+        self.assertNotIn("bootstrap_auth.rb:/opt/artgenial/bootstrap_auth.rb:ro", self.text)
+        self.assertNotIn("bootstrap_base.rb:/opt/artgenial/bootstrap_base.rb:ro", self.text)
 
     def test_only_six_public_services_are_exposed_to_coolify_proxy(self):
         exposed = set()
@@ -150,18 +153,21 @@ class CoolifyComposeTests(unittest.TestCase):
                 self.assertIn("ActiveRecord::SchemaMigration.new(", source)
                 self.assertNotIn("connection.schema_migration", source)
 
-    def test_all_relative_bind_mount_sources_exist(self):
-        expected = {
-            "provisioning/coolify/prepare-shared-schema.sh",
-            "provisioning/commercial/bootstrap_auth.rb",
-            "provisioning/commercial/bootstrap_base.rb",
-            "provisioning/commercial/processor-entrypoint.sh",
-            "provisioning/commercial/bot-entrypoint.sh",
-            "provisioning/commercial/flow-entrypoint.sh",
-        }
-        repository_root = PROVISIONING.parent
-        for relative in expected:
-            self.assertTrue((repository_root / relative).is_file(), relative)
+    def test_coolify_critical_startup_assets_do_not_depend_on_bind_mounts(self):
+        self.assertIn("prepare-shared-schema.sh:/opt/artgenial/prepare-shared-schema.sh:ro", self.text)
+        for forbidden in (
+            "bootstrap_auth.rb:/opt/artgenial/bootstrap_auth.rb:ro",
+            "bootstrap_base.rb:/opt/artgenial/bootstrap_base.rb:ro",
+            "processor-entrypoint.sh:/opt/artgenial/processor-entrypoint.sh:ro",
+            "bot-entrypoint.sh:/opt/artgenial/bot-entrypoint.sh:ro",
+            "flow-entrypoint.sh:/opt/artgenial/flow-entrypoint.sh:ro",
+        ):
+            self.assertNotIn(forbidden, self.text)
+
+    def test_evolution_prisma_receives_runtime_database_url(self):
+        self.assertIn("DATABASE_CONNECTION_URI: postgresql://", self.text)
+        self.assertIn("DATABASE_URL: postgresql://", self.text)
+        self.assertIn("rm -f .env && . ./Docker/scripts/deploy_database.sh", self.text)
 
     def test_coolify_project_directory_paths_never_escape_repository_root(self):
         self.assertNotIn("../", self.text)

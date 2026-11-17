@@ -191,10 +191,50 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:?}
       ADMIN_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:-}
     entrypoint: [/usr/local/bin/evo-auth-entrypoint]
-    command: [bash, -c, 'rm -f /rails/tmp/pids/server.pid && bundle exec rails db:create && bundle exec rails db:migrate && bundle exec rails runner /opt/artgenial/bootstrap_auth.rb && exec bundle exec rails server -b 0.0.0.0 -p 3001']
+    command:
+      - bash
+      - -c
+      - |
+        rm -f /rails/tmp/pids/server.pid
+        bundle exec rails db:create
+        bundle exec rails db:migrate
+        bundle exec rails runner - <<'RUBY'
+        ActiveRecord::Base.transaction do
+          ActiveRecord::Base.connection.execute('SELECT pg_advisory_xact_lock(73829104)')
+          load Rails.root.join('db', 'seeds', 'rbac.rb') unless Role.exists?(key: 'super_admin')
+          account = RuntimeConfig.account
+          if account
+            raise 'Account identity conflict' unless account['name'] == ENV.fetch('INSTALLATION_NAME') &&
+                                                     account['domain'] == ENV.fetch('FRONTEND_HOST')
+          else
+            RuntimeConfig.set('account', {
+              id: SecureRandom.uuid,
+              name: ENV.fetch('INSTALLATION_NAME'),
+              domain: ENV.fetch('FRONTEND_HOST'),
+              support_email: ENV.fetch('ADMIN_EMAIL'),
+              locale: 'pt-BR', status: 'active', features: {}, settings: {}, custom_attributes: {}
+            })
+          end
+          raise 'Account bootstrap failed' unless RuntimeConfig.account
+          email = ENV.fetch('ADMIN_EMAIL').downcase
+          user = User.from_email(email)
+          if user
+            raise 'Existing administrator identity conflict' unless user.name == ENV.fetch('ADMIN_NAME') &&
+                                                                   user.has_role?('super_admin')
+          else
+            raise 'Existing users require manual review' if User.exists?
+            password = ENV.fetch('ADMIN_PASSWORD')
+            user = User.create!(name: ENV.fetch('ADMIN_NAME'), email: email, password: password,
+                                password_confirmation: password, provider: 'email', uid: email,
+                                availability: :online, mfa_method: :disabled,
+                                confirmed_at: Time.current, type: 'User')
+            UserRole.assign_role_to_user(user, Role.find_by!(key: 'super_admin'))
+          end
+        end
+        RUBY
+        exec bundle exec rails server -b 0.0.0.0 -p 3001
     volumes:
       - auth_storage:/rails/storage
-      - ./provisioning/commercial/bootstrap_auth.rb:/opt/artgenial/bootstrap_auth.rb:ro
     depends_on:
       auth-migration-stamp: {condition: service_completed_successfully}
       flow-db-init: {condition: service_completed_successfully}
@@ -254,11 +294,22 @@ services:
       INSTALLATION_KEY: ${INSTALLATION_KEY:?}
       ADMIN_EMAIL: ${ADMIN_EMAIL:?}
     entrypoint: /app/docker/entrypoints/rails.sh
-    command: [bash, -c, 'bundle exec rails runner /opt/artgenial/bootstrap_base.rb && exec bundle exec rails s -p 3000 -b 0.0.0.0']
+    command:
+      - bash
+      - -c
+      - |
+        bundle exec rails runner - <<'RUBY'
+        manifest = Artgenial::Templates::Loader.new.load(template_key: 'artgenial.base', version: '1')
+        actor = User.find_by!(email: ENV.fetch('ADMIN_EMAIL').downcase)
+        result = Artgenial::Templates::Applier.new(
+          installation_key: ENV.fetch('INSTALLATION_KEY'), manifest: manifest, actor: actor
+        ).call
+        raise 'Base ArtGenial not applied' unless %i[applied already_applied].include?(result.status)
+        RUBY
+        exec bundle exec rails s -p 3000 -b 0.0.0.0
     volumes:
       - crm_storage:/app/storage
       - crm_cache:/app/tmp/cache
-      - ./provisioning/commercial/bootstrap_base.rb:/opt/artgenial/bootstrap_base.rb:ro
     depends_on:
       evo-auth: {condition: service_healthy}
       evolution-api: {condition: service_healthy}
@@ -330,8 +381,8 @@ services:
     <<: *common
     build: {context: ./evo-ai-processor-community}
     expose: ["8000"]
-    entrypoint: [sh, /opt/artgenial/processor-entrypoint.sh]
-    command: [sh, -c, 'alembic upgrade head && python -m scripts.run_seeders && exec uvicorn src.main:app --host "$$HOST" --port "$$PORT"']
+    entrypoint: [sh, -ec]
+    command: ['export POSTGRES_CONNECTION_STRING="postgresql://$${POSTGRES_USERNAME:?}:$${POSTGRES_PASSWORD:?}@postgres:5432/$${POSTGRES_DATABASE:?}"; alembic upgrade head; python -m scripts.run_seeders; exec uvicorn src.main:app --host "$$HOST" --port "$$PORT"']
     environment:
       POSTGRES_USERNAME: ${POSTGRES_USERNAME:?}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
@@ -353,7 +404,6 @@ services:
       APP_URL: ${APP_URL:?}
     volumes:
       - processor_logs:/app/logs
-      - ./provisioning/commercial/processor-entrypoint.sh:/opt/artgenial/processor-entrypoint.sh:ro
     depends_on:
       evo-auth: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -374,8 +424,8 @@ services:
       BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET:?}
       MEDIA_HOST_ALLOWLIST: ${MEDIA_HOST_ALLOWLIST:?}
       AI_CALL_TIMEOUT_SECONDS: "90"
-    entrypoint: [sh, /opt/artgenial/bot-entrypoint.sh]
-    volumes: [./provisioning/commercial/bot-entrypoint.sh:/opt/artgenial/bot-entrypoint.sh:ro]
+    entrypoint: [sh, -ec]
+    command: ['export REDIS_URL="redis://:$${REDIS_PASSWORD:?}@redis:6379"; exec /app/evo-bot-runtime']
     depends_on:
       evo-processor: {condition: service_healthy}
     healthcheck:
@@ -387,12 +437,15 @@ services:
   evolution-api:
     <<: *common
     build: {context: ./evolution-api}
+    entrypoint: [/bin/bash, -c]
+    command: ['rm -f .env && . ./Docker/scripts/deploy_database.sh && exec npm run start:prod']
     environment:
       SERVER_PORT: "8080"
       SERVER_URL: http://evolution-api:8080
       AUTHENTICATION_API_KEY: ${EVOLUTION_ADMIN_SECRET:?}
       DATABASE_PROVIDER: postgresql
       DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USERNAME:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DATABASE:?}?schema=evolution_api
+      DATABASE_URL: postgresql://${POSTGRES_USERNAME:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DATABASE:?}?schema=evolution_api
       DATABASE_CONNECTION_CLIENT_NAME: ${INSTALLATION_KEY:?}
       CACHE_REDIS_ENABLED: "true"
       CACHE_REDIS_URI: redis://:${REDIS_PASSWORD:?}@redis:6379/5
@@ -418,7 +471,8 @@ services:
     <<: *common
     build: {context: ./evo-flow-community}
     expose: ["3334"]
-    entrypoint: [sh, /opt/artgenial/flow-entrypoint.sh]
+    entrypoint: [sh, -ec]
+    command: ['export POSTGRES_DB_PASSWORD="$${POSTGRES_PASSWORD:?}"; export RABBITMQ_URL="amqp://$${RABBITMQ_DEFAULT_USER:?}:$${RABBITMQ_DEFAULT_PASS:?}@rabbitmq:5672"; node_modules/.bin/typeorm migration:run -d dist/database/ormconfig.js; exec node dist/main.js']
     environment:
       NODE_ENV: production
       RUN_MODE: api
@@ -450,7 +504,6 @@ services:
       POSTGRES_DB_DATABASE: ${FLOW_DATABASE:?}
       EVOAI_CRM_BASE_URL: http://evo-crm:3000
       EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN:?}
-    volumes: [./provisioning/commercial/flow-entrypoint.sh:/opt/artgenial/flow-entrypoint.sh:ro]
     depends_on:
       clickhouse: {condition: service_healthy}
       rabbitmq: {condition: service_healthy}
