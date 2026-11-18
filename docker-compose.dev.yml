@@ -178,7 +178,9 @@ services:
       EVO_FLOW_API_URL: http://evo-flow:3334/api/v1
       EVO_FLOW_ALLOW_INSECURE: ${EVO_FLOW_ALLOW_INSECURE:-true}
       ACTIVE_STORAGE_SERVICE: ${ACTIVE_STORAGE_SERVICE:-local}
-      RUN_MIGRATIONS: "false"
+      # The web process is the single migration owner. In development Rails returns
+      # 500 for every request while a migration is pending, including /health/live.
+      RUN_MIGRATIONS: "true"
     volumes:
       - crm_bundle:/usr/local/bundle
       - crm_node_modules:/app/node_modules
