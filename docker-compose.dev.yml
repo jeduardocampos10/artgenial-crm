@@ -174,6 +174,10 @@ services:
       BOT_RUNTIME_URL: http://evo-bot-runtime:8080
       BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET}
       BOT_RUNTIME_POSTBACK_BASE_URL: http://evo-crm:3000
+      EVOLUTION_API_URL: http://evolution-api:8080
+      EVOLUTION_ADMIN_SECRET: ${EVOLUTION_ADMIN_SECRET:?}
+      EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET:?}
+      INSTALLATION_KEY: ${INSTALLATION_KEY:?}
       EVO_FLOW_ENABLED: ${EVO_FLOW_ENABLED:-true}
       EVO_FLOW_API_URL: http://evo-flow:3334/api/v1
       EVO_FLOW_ALLOW_INSECURE: ${EVO_FLOW_ALLOW_INSECURE:-true}
@@ -192,6 +196,8 @@ services:
       redis:
         condition: service_healthy
       evo-auth:
+        condition: service_healthy
+      evolution-api:
         condition: service_healthy
     entrypoint: /app/docker/entrypoints/rails.sh
     command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
@@ -230,6 +236,10 @@ services:
       BOT_RUNTIME_URL: http://evo-bot-runtime:8080
       BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET}
       BOT_RUNTIME_POSTBACK_BASE_URL: http://evo-crm:3000
+      EVOLUTION_API_URL: http://evolution-api:8080
+      EVOLUTION_ADMIN_SECRET: ${EVOLUTION_ADMIN_SECRET:?}
+      EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET:?}
+      INSTALLATION_KEY: ${INSTALLATION_KEY:?}
       EVO_FLOW_ENABLED: ${EVO_FLOW_ENABLED:-true}
       EVO_FLOW_API_URL: http://evo-flow:3334/api/v1
       EVO_FLOW_ALLOW_INSECURE: ${EVO_FLOW_ALLOW_INSECURE:-true}
@@ -243,6 +253,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      evolution-api:
         condition: service_healthy
     healthcheck:
       disable: true
@@ -358,6 +370,63 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  evolution-api:
+    build:
+      context: ./evolution-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8080"
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        rm -f .env
+        cat > prisma.config.ts <<'PRISMA_CONFIG'
+        import path from 'node:path';
+        import { defineConfig, env } from 'prisma/config';
+        const provider = process.env.DATABASE_PROVIDER ?? 'postgresql';
+        const schemaFile = provider === 'mysql' ? 'mysql-schema.prisma' :
+          provider === 'psql_bouncer' ? 'psql_bouncer-schema.prisma' : 'postgresql-schema.prisma';
+        export default defineConfig({
+          schema: path.join('prisma', schemaFile),
+          migrations: { path: path.join('prisma', 'migrations') },
+          datasource: { url: env('DATABASE_CONNECTION_URI') },
+        });
+        PRISMA_CONFIG
+        . ./Docker/scripts/deploy_database.sh
+        exec npm run start:prod
+    environment:
+      SERVER_TYPE: http
+      SERVER_PORT: "8080"
+      SERVER_URL: http://evolution-api:8080
+      AUTHENTICATION_API_KEY: ${EVOLUTION_ADMIN_SECRET:?}
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD:-evoai_dev_password}@postgres:5432/${POSTGRES_DATABASE:-evo_community}?schema=evolution_api
+      DATABASE_URL: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD:-evoai_dev_password}@postgres:5432/${POSTGRES_DATABASE:-evo_community}?schema=evolution_api
+      DATABASE_CONNECTION_CLIENT_NAME: ${INSTALLATION_KEY:?}
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://:${REDIS_PASSWORD:-evoai_redis_pass}@redis:6379/5
+      CACHE_REDIS_TTL: "604800"
+      CACHE_REDIS_PREFIX_KEY: ${INSTALLATION_KEY:?}
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "false"
+      TELEMETRY_ENABLED: "false"
+      LANGUAGE: pt-BR
+    volumes:
+      - evolution_instances:/evolution/instances
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8080/license/status',r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>{try{if(r.statusCode!==200||JSON.parse(b).status!=='active')process.exit(1)}catch{process.exit(1)}})}).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
 
   clickhouse:
     image: clickhouse/clickhouse-server:latest
@@ -518,4 +587,5 @@ volumes:
   crm_cache:
   crm_storage:
   processor_logs:
+  evolution_instances:
   clickhouse_data:

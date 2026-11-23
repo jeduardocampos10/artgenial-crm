@@ -9,6 +9,7 @@ from provisioning.coolify.validate_images import IMAGE_VARIABLES, validate
 
 PROVISIONING = Path(__file__).resolve().parents[1]
 COMPOSE = PROVISIONING / "coolify" / "compose.yaml"
+DEV_COMPOSE = PROVISIONING.parent / "docker-compose.dev.yml"
 
 
 class CoolifyComposeTests(unittest.TestCase):
@@ -286,6 +287,39 @@ class CoolifyComposeTests(unittest.TestCase):
             self.assertNotIn("ports:", block, service)
             self.assertNotIn("expose:", block, service)
         self.assertIn("networks: [private]", self.text)
+
+
+class DevelopmentEvolutionComposeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.text = DEV_COMPOSE.read_text(encoding="utf-8")
+
+    def service(self, name, next_name):
+        return self.text.split(f"\n  {name}:\n", 1)[1].split(f"\n  {next_name}:\n", 1)[0]
+
+    def test_evolution_is_private_and_license_gated(self):
+        evolution = self.service("evolution-api", "clickhouse")
+        self.assertNotIn("\n    ports:", evolution)
+        self.assertIn("\n    expose:\n      - \"8080\"", evolution)
+        self.assertIn("AUTHENTICATION_API_KEY: ${EVOLUTION_ADMIN_SECRET:?}", evolution)
+        self.assertIn("http://127.0.0.1:8080/license/status", evolution)
+        self.assertIn("JSON.parse(b).status!=='active'", evolution)
+        self.assertIn("AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: \"false\"", evolution)
+        self.assertIn("TELEMETRY_ENABLED: \"false\"", evolution)
+
+    def test_crm_consumers_receive_admin_and_webhook_secrets(self):
+        crm = self.service("evo-crm", "evo-crm-sidekiq")
+        sidekiq = self.service("evo-crm-sidekiq", "evo-core")
+        for service in (crm, sidekiq):
+            self.assertIn("EVOLUTION_API_URL: http://evolution-api:8080", service)
+            self.assertIn("EVOLUTION_ADMIN_SECRET: ${EVOLUTION_ADMIN_SECRET:?}", service)
+            self.assertIn("EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET:?}", service)
+            self.assertIn("INSTALLATION_KEY: ${INSTALLATION_KEY:?}", service)
+            self.assertIn("evolution-api:\n        condition: service_healthy", service)
+
+    def test_evolution_state_is_persistent(self):
+        self.assertIn("- evolution_instances:/evolution/instances", self.text)
+        self.assertRegex(self.text, r"(?m)^  evolution_instances:\s*$")
 
 
 if __name__ == "__main__":
