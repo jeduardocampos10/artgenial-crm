@@ -2,6 +2,8 @@
 
 Esta topologia cria **uma instalação por recurso Compose do Coolify**. Ela é exclusiva para homologação e não substitui `provisioning/commercial/`, não altera produção e não deve apontar para `main`.
 
+Para recuperar com segurança uma instalação existente que voltou ao Compose raiz, consulte [`RECOVERY_EXISTING_INSTALLATION.md`](RECOVERY_EXISTING_INSTALLATION.md). O roteiro é um gate de diagnóstico e preparação, não autorização de deploy.
+
 ## Barreiras obrigatórias
 
 - Recurso Coolify, namespace Compose, rede, volumes e variáveis exclusivos por instalação.
@@ -60,6 +62,12 @@ Todos os valores abaixo são exclusivos da instalação e cadastrados somente no
 - `SMTP_USERNAME`, `SMTP_PASSWORD`.
 
 Também configure os valores técnicos não secretos exigidos pelo Compose, incluindo SMTP, nomes de banco/usuário e ClickHouse.
+
+### Contrato CRM → Evolution API
+
+A URL privada canônica é `http://evolution-api:8080`; não a substitua por domínio público. O mesmo valor exclusivo da instalação armazenado como `EVOLUTION_ADMIN_SECRET` no cofre é injetado com nomes distintos conforme o consumidor: `EVOLUTION_ADMIN_SECRET` em `evo-crm` e `evo-crm-sidekiq`, pois esse é o nome lido pelo backend, e `AUTHENTICATION_API_KEY` em `evolution-api`, pois esse é o nome lido pela Evolution. `EVOLUTION_API_KEY` não é consumida pelo backend do CRM e não deve ser usada como substituta. Essa credencial é a chave de licença/API emitida pela Evolution Foundation, não um segredo gerado localmente. Nunca copie esse valor entre homologação, SaaS e produção.
+
+O healthcheck da Evolution consulta `/license/status` e só aprova `status=active`. Uma resposta `200` em `/` não comprova ativação, pois essa rota permanece liberada pelo gate de licença.
 
 ## Bootstrap idempotente
 
