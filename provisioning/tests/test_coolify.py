@@ -52,6 +52,9 @@ class CoolifyComposeTests(unittest.TestCase):
             evolution_environment,
             r"(?m)^      AUTHENTICATION_API_KEY: \$\{EVOLUTION_ADMIN_SECRET:\?\}$",
         )
+        self.assertIn("http://127.0.0.1:8080/license/status", evolution)
+        self.assertIn("JSON.parse(b).status!=='active'", evolution)
+        self.assertNotIn("http://127.0.0.1:8080/'", evolution)
 
     def test_never_publishes_host_ports_or_embeds_ingress(self):
         self.assertNotRegex(self.text, r"(?m)^\s+ports:\s*$")

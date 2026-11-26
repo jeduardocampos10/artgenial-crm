@@ -2,6 +2,8 @@
 
 Esta topologia cria **uma instalação por recurso Compose do Coolify**. Ela é exclusiva para homologação e não substitui `provisioning/commercial/`, não altera produção e não deve apontar para `main`.
 
+Para recuperar com segurança uma instalação existente que voltou ao Compose raiz, consulte [`RECOVERY_EXISTING_INSTALLATION.md`](RECOVERY_EXISTING_INSTALLATION.md). O roteiro é um gate de diagnóstico e preparação, não autorização de deploy.
+
 ## Barreiras obrigatórias
 
 - Recurso Coolify, namespace Compose, rede, volumes e variáveis exclusivos por instalação.
@@ -61,6 +63,12 @@ Todos os valores abaixo são exclusivos da instalação e cadastrados somente no
 
 Também configure os valores técnicos não secretos exigidos pelo Compose, incluindo SMTP, nomes de banco/usuário e ClickHouse.
 
+### Contrato CRM → Evolution API
+
+A URL privada canônica é `http://evolution-api:8080`; não a substitua por domínio público. O mesmo valor exclusivo da instalação armazenado como `EVOLUTION_ADMIN_SECRET` no cofre é injetado com nomes distintos conforme o consumidor: `EVOLUTION_ADMIN_SECRET` em `evo-crm` e `evo-crm-sidekiq`, pois esse é o nome lido pelo backend, e `AUTHENTICATION_API_KEY` em `evolution-api`, pois esse é o nome lido pela Evolution. `EVOLUTION_API_KEY` não é consumida pelo backend do CRM e não deve ser usada como substituta. Essa credencial é a chave de licença/API emitida pela Evolution Foundation, não um segredo gerado localmente. Nunca copie esse valor entre homologação, SaaS e produção.
+
+O healthcheck da Evolution consulta `/license/status` e só aprova `status=active`. Uma resposta `200` em `/` não comprova ativação, pois essa rota permanece liberada pelo gate de licença.
+
 ## Bootstrap idempotente
 
 Antes dos serviços permanentes, três jobs idempotentes preparam o banco compartilhado: `crm-schema-init` carrega o schema mestre somente quando o banco está vazio e rejeita banco existente sem ledger; `auth-migration-stamp` registra as migrations Auth já contidas no schema; `flow-db-init` cria o banco Flow somente se ausente.
@@ -74,6 +82,38 @@ Depois de comprovar login, conta e Base:
 3. confirme que o bootstrap retorna ao estado existente sem criar outro usuário ou reaplicar a Base.
 
 Conflito de conta, administrador ou `installation_key` deve interromper o startup.
+
+### Recuperação controlada da senha do administrador
+
+O bootstrap é deliberadamente idempotente: se o administrador já existe, ele valida identidade e papel, mas **não redefine sua senha**. Reintroduzir `ADMIN_BOOTSTRAP_PASSWORD` e redeployar, sem uma operação explícita, não modifica o usuário existente.
+
+Este procedimento é exclusivo para homologação e recuperação supervisionada. Ele não autoriza alterações em produção.
+
+1. Mantenha a mesma release imutável e cadastre temporariamente uma **nova** `ADMIN_BOOTSTRAP_PASSWORD` no cofre do recurso Coolify, disponível em runtime. Nunca reutilize uma senha exibida em log, terminal, captura ou conversa.
+2. Salve a variável e faça **redeploy**, não apenas restart. Se o Coolify mostrar `Changes pending`, o container atual ainda não recebeu a configuração.
+3. Feche terminais anteriores e abra uma sessão no novo container `evo-auth`, identificado pelo timestamp mais recente. Confirme a presença sem imprimir o valor:
+
+   ```sh
+   if [ -n "${ADMIN_PASSWORD:-}" ]; then
+     echo "OK: ADMIN_PASSWORD disponível"
+   else
+     echo "ERRO: ADMIN_PASSWORD ausente"
+   fi
+   ```
+
+4. Somente após a confirmação, execute no `evo-auth` o runner fail-closed:
+
+   ```sh
+   cd /rails && bundle exec rails runner 'email=ENV.fetch("ADMIN_EMAIL").downcase; user=User.from_email(email); raise "Administrador não encontrado" unless user; raise "Usuário não possui super_admin" unless user.has_role?("super_admin"); password=ENV.fetch("ADMIN_PASSWORD"); raise "A senha deve ter pelo menos 16 caracteres" if password.length < 16; user.update!(password: password, password_confirmation: password); puts "OK: senha redefinida para #{email}"'
+   ```
+
+5. Valide o login pelo domínio da instalação. Depois, remova imediatamente `ADMIN_BOOTSTRAP_PASSWORD`, redeploye novamente a mesma release e confirme que o sistema permanece saudável.
+
+Se o runner retornar `key not found: "ADMIN_PASSWORD"`, não o adapte para inserir a senha na linha de comando. Isso significa que o segredo não chegou ao container — normalmente por mudanças pendentes, ausência em runtime ou terminal ainda conectado ao container anterior. Como `ENV.fetch` ocorre antes de `user.update!`, essa falha específica não altera a senha.
+
+A redefinição da senha não deve ser tratada como prova de revogação de tokens ou sessões já emitidos. Essa revogação exige validação separada do mecanismo de autenticação antes de qualquer ação.
+
+**Aceite obrigatório:** runner confirma a atualização, login funciona com a senha nova, a senha nunca aparece nas evidências, o segredo temporário é removido e o redeploy idempotente permanece saudável.
 
 ## Primeiro deploy
 

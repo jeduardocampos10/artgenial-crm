@@ -412,7 +412,7 @@ services:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
     healthcheck:
-      test: [CMD, node, -e, "require('http').get('http://127.0.0.1:8080/',r=>{if(r.statusCode!==200)throw Error(r.statusCode)})"]
+      test: [CMD, node, -e, "require('http').get('http://127.0.0.1:8080/license/status',r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>{try{if(r.statusCode!==200||JSON.parse(b).status!=='active')process.exit(1)}catch{process.exit(1)}})}).on('error',()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 10
