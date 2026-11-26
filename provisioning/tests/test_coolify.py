@@ -34,6 +34,25 @@ class CoolifyComposeTests(unittest.TestCase):
             },
         )
 
+    def test_crm_and_evolution_share_the_canonical_admin_secret(self):
+        crm = self.text.split("\n  evo-crm:\n", 1)[1].split("\n  evo-crm-sidekiq:\n", 1)[0]
+        sidekiq = self.text.split("\n  evo-crm-sidekiq:\n", 1)[1].split("\n  evo-core:\n", 1)[0]
+        evolution = self.text.split("\n  evolution-api:\n", 1)[1].split("\n  evo-flow:\n", 1)[0]
+
+        for service in (crm, sidekiq):
+            environment = service.split("\n    environment:\n", 1)[1].split("\n    entrypoint:", 1)[0]
+            self.assertRegex(environment, r"(?m)^      EVOLUTION_API_URL: http://evolution-api:8080$")
+            self.assertRegex(
+                environment,
+                r"(?m)^      EVOLUTION_ADMIN_SECRET: \$\{EVOLUTION_ADMIN_SECRET:\?\}$",
+            )
+            self.assertNotRegex(environment, r"(?m)^      EVOLUTION_API_KEY:")
+        evolution_environment = evolution.split("\n    environment:\n", 1)[1].split("\n    volumes:", 1)[0]
+        self.assertRegex(
+            evolution_environment,
+            r"(?m)^      AUTHENTICATION_API_KEY: \$\{EVOLUTION_ADMIN_SECRET:\?\}$",
+        )
+
     def test_never_publishes_host_ports_or_embeds_ingress(self):
         self.assertNotRegex(self.text, r"(?m)^\s+ports:\s*$")
         self.assertNotRegex(self.text.lower(), r"(?m)^\s+caddy:\s*$")
